@@ -10,6 +10,7 @@ dependencies = [
     "openai>=1.60",
     "python-dotenv>=1.0",
     "pydantic-ai-slim[openai]>=2.63.0",
+    "pillow>=13.0.0",
 ]
 
 [project.scripts]

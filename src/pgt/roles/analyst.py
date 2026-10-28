@@ -8,7 +8,7 @@ from pgt.harness.context import assemble
 from pgt.llm.runtime import Scope, run_role
 from pgt.roles.metrics import READOUT_RULE, Signal
 from pgt.roles.tools import evidence_tool
-from pgt.schemas import Evidence, Findings, SharedFacts, TestReadout
+from pgt.schemas import Answer, Evidence, Findings, SharedFacts, TestReadout
 
 INSTRUCTIONS = """\
 You are the Analyst on a small AI growth team that runs Meta ads for one advertiser.
@@ -74,3 +74,65 @@ async def run_readout(
         inputs=[readout.evidence_id],
     )
     return await run_role("analyst", TestReadout, pack, scope, model)
+
+
+async def run_weekly_analyst(
+    scope: Scope,
+    model: Model,
+    facts: SharedFacts,
+    fact_version: int,
+    week: int,
+    signals: list[Signal],
+    evidence: list[Evidence],
+    issues: list[str] = (),
+) -> Findings:
+    data = {
+        "week": week,
+        "signals": [s.model_dump(mode="json") for s in signals],
+        "evidence": {e.evidence_id: e.values for e in evidence},
+    }
+    if issues:
+        data["review_issues_to_fix"] = list(issues)
+    pack = assemble(
+        "analyst",
+        INSTRUCTIONS,
+        facts,
+        fact_version,
+        task=f"Write the findings for the week {week} review: this week's winners and losers, "
+        "and the daily findings carried into the week (signals of kind carried).",
+        done_when="Each signal becomes one finding with subject_id, a one-sentence claim, the "
+        "metric name, a value copied from its cited evidence, the evidence_ids, and the signal's "
+        "severity." + (" Every review issue is fixed." if issues else ""),
+        data=data,
+        inputs=[e.evidence_id for e in evidence],
+    )
+    return await run_role("analyst", Findings, pack, scope, model, [evidence_tool(scope)])
+
+
+async def run_answer(
+    scope: Scope,
+    model: Model,
+    facts: SharedFacts,
+    fact_version: int,
+    question: str,
+    evidence: list[Evidence],
+    issues: list[str] = (),
+) -> Answer:
+    """Answer one question from another role. The Analyst has no ask tool: one hop only."""
+    data = {"question": question, "evidence": {e.evidence_id: e.values for e in evidence}}
+    if issues:
+        data["review_issues_to_fix"] = list(issues)
+    pack = assemble(
+        "analyst",
+        INSTRUCTIONS,
+        facts,
+        fact_version,
+        task="Answer the question from a teammate in one or two plain sentences, using only the "
+        "evidence given.",
+        done_when="The answer cites the evidence IDs it uses, and every number in it is copied "
+        "from that evidence. If the evidence cannot answer the question, say so and cite the "
+        "closest evidence." + (" Every review issue is fixed." if issues else ""),
+        data=data,
+        inputs=[e.evidence_id for e in evidence],
+    )
+    return await run_role("analyst", Answer, pack, scope, model)

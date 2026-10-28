@@ -6,8 +6,8 @@ Criteria and weights come from PRD §8.6. Scored criteria get 1–5 points. Run 
 
 | Criterion | Weight | Pydantic AI | OpenAI Agents SDK | Notes |
 | --- | --- | --- | --- | --- |
-| Works with the Meta API (offline fake) | Must pass | ✅ 15/15 tests | ✅ 15/15 tests | Same acceptance suite for both |
-| Works with the Meta API (live, `muse-spark-1.3`) | Must pass | ✅ 2/2 runs | ✅ 2/2 runs | Typed output, tool calls and web search all worked |
+| Works with the Meta API (offline fake) | Must pass | yes 15/15 tests | yes 15/15 tests | Same acceptance suite for both |
+| Works with the Meta API (live, `muse-spark-1.3`) | Must pass | yes 2/2 runs | yes 2/2 runs | Typed output, tool calls and web search all worked |
 | Policy can be enforced in code | 25% | **5** | 4 | Pydantic AI: one `wrap_tool_execute` hook covers every tool. Agents SDK: a guardrail must be attached to each tool. In both, hosted web search can only be allowed or withheld, not gated per call. |
 | Glue code needed | 20% | **5** (87 lines) | 4 (94 lines) | Close |
 | Visibility | 20% | **5** | 3 | Pydantic AI: `wrap_model_request` sees every model call, including hosted search calls. Agents SDK: run hooks miss hosted tools, so the spike subclasses the model class, which depends on library internals. |

@@ -60,6 +60,7 @@ class SharedFacts(BaseModel):
     result_name: str  # what a "result" is, e.g. "trial"
     target_cost_per_result: float
     weekly_budget: float
+    test_budget_share: float = 0.2  # part of the weekly budget reserved for creative tests
     brand_voice: str
     house_rules: HouseRules = HouseRules()
     constraints: list[str] = []

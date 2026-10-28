@@ -136,10 +136,10 @@ The user can type into the Team Room, for example "Cut the budget to $30/day". P
 
 | Level | Name | What PGT can do | Hackathon build |
 | --- | --- | --- | --- |
-| L0 | Observe | Read account data, diagnose, report | Real account ✅ · Sandbox ✅ |
-| L1 | Recommend | Write plans, ads and change sets, but not apply them | ✅ |
-| L2 | Prepare | After approval, apply the change: new ads and campaigns are created **paused**; budget and pause changes take effect | Sandbox only ✅ · Real account ❌ (roadmap) |
-| L3 | Manage within guardrails | Make small changes automatically within limits the user set once (e.g. pause an ad whose cost per result is over 2× the target after $50 spend) | ❌ Roadmap only |
+| L0 | Observe | Read account data, diagnose, report | Real account yes · Sandbox yes |
+| L1 | Recommend | Write plans, ads and change sets, but not apply them | yes |
+| L2 | Prepare | After approval, apply the change: new ads and campaigns are created **paused**; budget and pause changes take effect | Sandbox only yes · Real account no (roadmap) |
+| L3 | Manage within guardrails | Make small changes automatically within limits the user set once (e.g. pause an ad whose cost per result is over 2× the target after $50 spend) | Roadmap only |
 
 ### 5.2 Does PGT take over the ad account?
 
