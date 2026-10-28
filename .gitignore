@@ -27,3 +27,6 @@ web/dist/
 
 # OS
 .DS_Store
+
+# Bench output
+bench/out/

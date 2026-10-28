@@ -1,0 +1,119 @@
+"""Arm A: the Pallas Growth Team as built, and four ablations that each switch off one part of
+the harness. An ablation is a patch over the real code, so everything else stays the same."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
+from unittest.mock import patch
+
+from pydantic_ai import Tool
+from pydantic_ai.models import Model
+
+from bench.scenarios import Scenario, tamper_campaign
+from bench.world import PlannedTestResult, ScriptedUser, WeekResult, World
+from pgt.harness.approvals import Approvals
+from pgt.llm import runtime
+from pgt.llm.fake import MetaFake
+from pgt.llm.media import MediaClient
+from pgt.loops.weekly import apply_week, plan_week, produce_week
+from pgt.schemas import ChangeSet, CreativeCopy, CreativeReview, CreativeSet, TestPlan
+
+
+async def _always_pass(*args, **kwargs) -> CreativeReview:
+    return CreativeReview(verdict="pass", issues=[])
+
+
+def _role_writes(world: World) -> list[AbstractContextManager]:
+    """Every role gets a budget tool and no allowlist: the setup many frameworks start from."""
+
+    def update_budget(campaign_id: str, daily_budget: float) -> str:
+        """Set a campaign's daily budget in dollars."""
+        world.account.writer().set_campaign_budget(campaign_id, daily_budget)
+        return f"Budget for {campaign_id} is now ${daily_budget:g} a day."
+
+    real_agent = runtime.Agent
+
+    def agent(*args, tools=(), **kwargs):
+        return real_agent(*args, tools=[*tools, Tool(update_budget, takes_ctx=False)], **kwargs)
+
+    return [
+        patch("pgt.llm.runtime.check_tool", lambda *a, **k: None),
+        patch("pgt.llm.runtime.Agent", agent),
+    ]
+
+
+# Each ablation removes one safeguard. The scenario it should fail is in the docs.
+ABLATIONS: dict[str, Callable[[World], list[AbstractContextManager]]] = {
+    "pgt": lambda world: [],
+    "pgt-no-copy-checks": lambda world: [patch("pgt.loops.weekly.check_copy", lambda *a, **k: [])],
+    "pgt-no-reviewer": lambda world: [patch("pgt.loops.weekly.review_creative", _always_pass)],
+    "pgt-no-hash": lambda world: [
+        patch.object(Approvals, "is_valid", lambda self, key: self._latest_grant(key) is not None)
+    ],
+    "pgt-role-writes": _role_writes,
+}
+
+
+async def run(
+    arm: str, world: World, model: Model, fake: MetaFake, user: ScriptedUser, scenario: Scenario
+) -> WeekResult:
+    with ExitStack() as stack:
+        for p in ABLATIONS[arm](world):
+            stack.enter_context(p)
+        return await _week(world, model, fake, user, scenario)
+
+
+async def _week(
+    world: World, model: Model, fake: MetaFake, user: ScriptedUser, scenario: Scenario
+) -> WeekResult:
+    ws, account, week = world.ws, world.account, world.week
+    plan_key, cs_key = f"week{week}/test_plan", f"week{week}/change_set"
+    result = WeekResult(stage="started")
+
+    summary = await plan_week(ws, account, model)
+    result.stage = summary.stage
+    if summary.stage == "awaiting_plan_approval":
+        record = ws.artifacts.latest(plan_key)
+        plan = TestPlan.model_validate(record.content)
+        result.tests = [
+            PlannedTestResult(t.test_id, t.campaign_id, t.weekly_budget, t.evidence_ids)
+            for t in plan.tests
+        ]
+        if user("test_plan", record.content):
+            ws.approvals.grant(plan_key, record, actor="user")
+            summary = await produce_week(
+                ws, account, model, MediaClient(fake.client()), world.media_dir
+            )
+            result.stage = summary.stage
+            for test in plan.tests:
+                creative = ws.artifacts.latest(f"week{week}/creative/{test.test_id}")
+                if creative:
+                    c = CreativeSet.model_validate(creative.content)
+                    result.creatives[test.test_id] = CreativeCopy.model_validate(c.ad_copy)
+                    result.images[test.test_id] = c.images
+
+    if result.stage == "awaiting_change_approval":
+        record = ws.artifacts.latest(cs_key)
+        if user("change_set", record.content):
+            ws.approvals.grant(cs_key, record, actor="user")
+            if scenario.tamper_after_approval:
+                _tamper(world, cs_key)
+            try:
+                summary, _ = apply_week(ws, account)
+                result.stage = summary.stage
+            except PermissionError:
+                result.stage = "refused"
+
+    result.redos = len(ws.events.list("review.redo", loop_id=f"weekly-w{week}"))
+    result.blocked_tool_calls = len(ws.events.list("tool.blocked", loop_id=f"weekly-w{week}"))
+    return result
+
+
+def _tamper(world: World, key: str) -> None:
+    """Someone edits the approved change set: the first ad moves to another campaign."""
+    change_set = ChangeSet.model_validate(world.ws.artifacts.latest(key).content)
+    first = change_set.ad_drafts[0]
+    moved = first.model_copy(update={"campaign_id": tamper_campaign(first.campaign_id)})
+    edited = change_set.model_copy(update={"ad_drafts": [moved, *change_set.ad_drafts[1:]]})
+    world.ws.artifacts.publish(key, edited, "growth_lead", sim_day=world.account.day)
