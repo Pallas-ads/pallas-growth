@@ -466,7 +466,7 @@ The longer-term answer to "is it better?" is the acceptance suite in §11. It ru
 - UI and deliverables are in English.
 - The daily check plus weekly review replaces the weekly-only sprint.
 - Role set approved: 6 AI roles plus the Operator (§6).
-- The library choice is settled by the Day 1 spike (§8.6).
+- Agent library: **Pydantic AI**, chosen by the Day 1 spike (weighted score 4.65 vs 4.00 for the OpenAI Agents SDK, which stays the fallback). Details: `spike/SCORECARD.md` in the repo.
 - House rules are user settings with presets; Balanced is the default (§4.3).
 - **Development tools.** The organizers confirmed that any coding tool is allowed (Claude Code, Codex, Cline, Copilot and similar) and does not need to be disclosed. Non-Meta models may be used alongside Meta's, but Meta's models must be a real part of what the project runs. Stage One checks this, and Meta tooling is 25% of the score. PGT meets this: every AI role runs on Meta models at runtime (§6). Codex and Claude Code are used only to write the code, never inside the product.
 
