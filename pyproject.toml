@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.9",
     "openai>=1.60",
     "python-dotenv>=1.0",
+    "pydantic-ai-slim[openai]>=2.63.0",
 ]
 
 [project.scripts]
@@ -19,7 +20,6 @@ dev = ["pytest>=8", "ruff>=0.6"]
 spike = [
     "httpx>=0.28.1",
     "openai-agents>=0.24.0",
-    "pydantic-ai-slim[openai]>=2.63.0",
 ]
 
 [build-system]
