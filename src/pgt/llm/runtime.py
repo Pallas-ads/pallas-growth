@@ -51,6 +51,7 @@ class _Harness(AbstractCapability):
         self.role, self.scope, self.pack = role, scope, pack
         self.searches = 0
         self.citations: list[tuple[str, str]] = []
+        self.blocked: set[str] = set()  # tool call IDs already refused and logged
 
     def _record_hosted(self, response: ModelResponse) -> int:
         """Log hosted (server-side) tool calls such as web search, and collect citations."""
@@ -79,6 +80,17 @@ class _Harness(AbstractCapability):
         self.searches += searches
         return searches
 
+    def _block_disallowed(self, response: ModelResponse) -> None:
+        """Log every call the model makes to a tool outside the role's allowlist, including
+        tools the role was never given (a prompt injection asking for a write tool, say)."""
+        for part in response.parts:
+            if (
+                isinstance(part, ToolCallPart)
+                and part.tool_call_id not in self.blocked
+                and check_tool(self.role, part.tool_name, self.scope.ws.events, self.scope.loop_id)
+            ):
+                self.blocked.add(part.tool_call_id)
+
     async def wrap_model_request(
         self,
         ctx: RunContext,
@@ -96,6 +108,8 @@ class _Harness(AbstractCapability):
             input_tokens = usage.input_tokens if usage else 0
             output_tokens = usage.output_tokens if usage else 0
             searches = self._record_hosted(response) if response is not None else 0
+            if response is not None:
+                self._block_disallowed(response)
             cost = estimate_cost(model_name, input_tokens, output_tokens, searches)
             self.scope.ws.events.append(
                 "model.call",
@@ -131,6 +145,8 @@ class _Harness(AbstractCapability):
         handler: WrapToolExecuteHandler,
     ) -> Any:
         events = self.scope.ws.events
+        if call.tool_call_id in self.blocked:
+            return f"Role {self.role} is not allowed to call {call.tool_name}."
         if error := check_tool(self.role, call.tool_name, events, self.scope.loop_id):
             return error
         events.append(

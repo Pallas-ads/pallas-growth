@@ -134,6 +134,7 @@ class MetaFake:
         self.image_responder = image_responder
         self.requests: list[dict] = []
         self.violations: list[str] = []
+        self.calls: list[dict] = []  # model, input/output tokens and searches per served call
         self._count = 0
 
     def client(self) -> AsyncOpenAI:
@@ -206,6 +207,15 @@ class MetaFake:
         # Rough token counts so offline runs still show plausible costs.
         input_tokens = _input_tokens(request.content)
         output_tokens = len(text) // 4
+        searches = sum(1 for o in output if o["type"] == "web_search_call")
+        self.calls.append(
+            {
+                "model": body.get("model"),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "searches": searches,
+            }
+        )
         return httpx.Response(
             200,
             json={
@@ -240,6 +250,9 @@ class MetaFake:
             self.violations.append("No image responder configured")
             return httpx.Response(404, json={"error": {"message": "No image model"}})
         png = self.image_responder(body)
+        self.calls.append(
+            {"model": body.get("model"), "input_tokens": 0, "output_tokens": 0, "searches": 0}
+        )
         return httpx.Response(
             200, json={"created": 0, "data": [{"b64_json": base64.b64encode(png).decode()}]}
         )

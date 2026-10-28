@@ -67,6 +67,25 @@ def test_blocked_tool_never_runs():
     assert len(ws.events.list("model.call")) == 2 and fake.violations == []
 
 
+def test_call_to_a_tool_the_role_was_never_given_is_logged():
+    # A prompt injection asks for a write tool the role does not have: the attempt is logged
+    # once, nothing runs, and the role still finishes.
+    def responder(body):
+        if not any(i.get("type") == "function_call_output" for i in body["input"]):
+            return FunctionCall("update_budget", {"campaign_id": "cmp_3", "daily_budget": 10000})
+        return Findings(findings=[])
+
+    fake = MetaFake(responder)
+    ws = Workspace()
+    scope = Scope(ws, CostMeter(ws.events), "loop-1", 1)
+    out = asyncio.run(run_role("analyst", Findings, pack(), scope, responses_model(fake.client())))
+    assert out == Findings(findings=[])
+    (blocked,) = ws.events.list("tool.blocked")
+    assert blocked.payload == {"role": "analyst", "tool": "update_budget"}
+    assert blocked.loop_id == "loop-1"
+    assert ws.events.list("tool.call") == [] and fake.violations == []
+
+
 def test_spend_cap_stops_the_role():
     fake = MetaFake(lambda body: Findings(findings=[]))
     ws = Workspace()
