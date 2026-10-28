@@ -1,0 +1,5 @@
+extend = "../pyproject.toml"
+
+[lint.per-file-ignores]
+# The supplied acceptance tests are immutable.
+"tests/test_variants.py" = ["SIM115"]

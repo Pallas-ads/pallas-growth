@@ -16,6 +16,11 @@ pgt = "pgt.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
+spike = [
+    "httpx>=0.28.1",
+    "openai-agents>=0.24.0",
+    "pydantic-ai-slim[openai]>=2.63.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -26,7 +31,7 @@ packages = ["src/pgt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100
