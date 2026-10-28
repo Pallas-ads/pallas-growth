@@ -1,4 +1,5 @@
-"""Operator: applies approved, gate-allowed changes. It is code, not a model."""
+"""Operator: applies approved, gate-allowed changes and creates approved ad drafts PAUSED.
+It is code, not a model."""
 
 from __future__ import annotations
 
@@ -36,12 +37,16 @@ def apply_change_set(ws: Workspace, account: SandboxAccount, key: str) -> Execut
                 change.target_id, "PAUSED" if change.kind == "pause_ad" else "ACTIVE"
             )
         applied.append(index)
+    # New ads from the weekly review are always created PAUSED; turning them on is a later,
+    # separately approved change.
+    created = [writer.create_ad(d.campaign_id, d.name) for d in change_set.ad_drafts]
     receipt = ExecutionReceipt(
         change_set_id=change_set.change_set_id,
         content_hash=record.content_hash,
         applied=applied,
         skipped=skipped,
         day=account.day,
+        created_ad_ids=created,
     )
     ws.events.append(
         "changeset.applied",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
@@ -10,7 +10,14 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.capabilities.abstract import WrapModelRequestHandler, WrapToolExecuteHandler
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelResponse,
+    NativeToolCallPart,
+    TextPart,
+    ToolCallPart,
+    WebCitationSource,
+)
 from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.tools import RunContext, ToolDefinition
 
@@ -30,9 +37,47 @@ class Scope:
     sim_day: int | None = None
 
 
+@dataclass
+class RoleRun[T: BaseModel]:
+    """A role's typed output plus what the hosted tools did along the way."""
+
+    output: T
+    searches: int = 0
+    citations: list[tuple[str, str]] = field(default_factory=list)  # (title, url)
+
+
 class _Harness(AbstractCapability):
     def __init__(self, role: str, scope: Scope, pack: ContextPack) -> None:
         self.role, self.scope, self.pack = role, scope, pack
+        self.searches = 0
+        self.citations: list[tuple[str, str]] = []
+
+    def _record_hosted(self, response: ModelResponse) -> int:
+        """Log hosted (server-side) tool calls such as web search, and collect citations."""
+        searches = 0
+        for part in response.parts:
+            if isinstance(part, NativeToolCallPart):
+                if part.tool_name == "web_search":
+                    searches += 1
+                self.scope.ws.events.append(
+                    "tool.call",
+                    self.role,
+                    {
+                        "role": self.role,
+                        "tool": part.tool_name,
+                        "args": part.args_as_dict(),
+                        "hosted": True,
+                    },
+                    sim_day=self.scope.sim_day,
+                    loop_id=self.scope.loop_id,
+                )
+            elif isinstance(part, TextPart):
+                for citation in part.citations or []:
+                    for source in citation.sources:
+                        if isinstance(source, WebCitationSource):
+                            self.citations.append((source.title or source.url, source.url))
+        self.searches += searches
+        return searches
 
     async def wrap_model_request(
         self,
@@ -50,7 +95,8 @@ class _Harness(AbstractCapability):
             model_name = request_context.model.model_name
             input_tokens = usage.input_tokens if usage else 0
             output_tokens = usage.output_tokens if usage else 0
-            cost = estimate_cost(model_name, input_tokens, output_tokens)
+            searches = self._record_hosted(response) if response is not None else 0
+            cost = estimate_cost(model_name, input_tokens, output_tokens, searches)
             self.scope.ws.events.append(
                 "model.call",
                 self.role,
@@ -59,6 +105,7 @@ class _Harness(AbstractCapability):
                     "model": model_name,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
+                    "searches": searches,
                     "cost": round(cost, 6),
                     "wall_time_s": round(perf_counter() - started, 3),
                     "context_hash": self.pack.context_hash,
@@ -103,25 +150,53 @@ async def run_role[T: BaseModel](
     scope: Scope,
     model: Model,
     tools: list = (),
+    attachments: list[BinaryContent] = (),
+    capabilities: list[AbstractCapability] = (),
 ) -> T:
     """Run one role and return its typed deliverable (strict JSON schema output)."""
+    run = await run_role_full(
+        role, output_type, pack, scope, model, tools, attachments, capabilities
+    )
+    return run.output
+
+
+async def run_role_full[T: BaseModel](
+    role: str,
+    output_type: type[T],
+    pack: ContextPack,
+    scope: Scope,
+    model: Model,
+    tools: list = (),
+    attachments: list[BinaryContent] = (),
+    capabilities: list[AbstractCapability] = (),
+) -> RoleRun[T]:
+    """Like run_role, plus hosted search counts and citations. `attachments` are images the
+    model sees with the prompt (the Reviewer's vision check). `capabilities` add hosted tools;
+    callers check the allowlist before adding one."""
+    harness = _Harness(role, scope, pack)
     agent = Agent(
         model,
         name=role,
         instructions=pack.instructions,
         output_type=NativeOutput(output_type, strict=True),
         tools=list(tools),
-        capabilities=[_Harness(role, scope, pack)],
+        capabilities=[harness, *capabilities],
         model_settings={"tool_choice": "auto", "openai_store": False},
     )
     agent.instrument = False
     scope.ws.events.append(
         "context.assembled",
         role,
-        {"role": role, "context_hash": pack.context_hash, "fact_version": pack.fact_version},
+        {
+            "role": role,
+            "context_hash": pack.context_hash,
+            "fact_version": pack.fact_version,
+            "attachments": len(attachments),
+        },
         refs=pack.inputs,
         sim_day=scope.sim_day,
         loop_id=scope.loop_id,
     )
-    result = await agent.run(pack.prompt)
-    return result.output
+    prompt = [pack.prompt, *attachments] if attachments else pack.prompt
+    result = await agent.run(prompt)
+    return RoleRun(result.output, harness.searches, list(dict.fromkeys(harness.citations)))

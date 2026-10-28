@@ -68,6 +68,16 @@ class GateResult(_Out):
     results: list[RuleResult]
 
 
+class AdDraft(_Out):
+    """A new ad the Operator creates PAUSED after approval (weekly review only)."""
+
+    campaign_id: str
+    name: str
+    creative_id: str  # the reviewed creative set it is built from
+    test_id: str
+    evidence_ids: list[str]
+
+
 class ChangeSet(_Out):
     change_set_id: str
     day: int
@@ -75,6 +85,7 @@ class ChangeSet(_Out):
     summary: str
     changes: list[Change]
     gate: list[GateResult]  # filled by the policy gate
+    ad_drafts: list[AdDraft] = []
 
 
 class ReviewVerdict(_Out):
@@ -89,6 +100,7 @@ class ExecutionReceipt(_Out):
     applied: list[int]  # indexes of changes that were applied
     skipped: list[int]  # indexes blocked or not approved
     day: int
+    created_ad_ids: list[str] = []  # PAUSED ads created from ad_drafts
 
 
 class DailyBrief(_Out):

@@ -14,7 +14,7 @@ TEST_LENGTH_DAYS = 7
 
 class Signal(BaseModel):
     subject_id: str
-    kind: Literal["fatigue", "high_cost", "learning", "test_due"]
+    kind: Literal["fatigue", "high_cost", "learning", "test_due", "winner", "loser", "carried"]
     severity: Literal["info", "watch", "act"]
     metric: str
     value: float
@@ -195,3 +195,71 @@ def expected_readout(values: dict[str, float]) -> str:
     if values["cost_per_result"] > 1.2 * target and values["spend"] >= 3 * target:
         return "stop"
     return "continue"
+
+
+def week_days(week: int) -> range:
+    """Simulated days in `week` (week 1 is days 1-7)."""
+    return range((week - 1) * 7 + 1, week * 7 + 1)
+
+
+def weekly_signals(
+    week: int, state: AccountState, rows: list[InsightRow], facts: SharedFacts
+) -> tuple[list[Signal], list[Evidence]]:
+    """Per-ad totals for the week, with winner and loser signals against the target."""
+    target = facts.target_cost_per_result
+    days = week_days(week)
+    signals: list[Signal] = []
+    evidence: list[Evidence] = []
+    for ad in state.ads:
+        week_rows = [r for r in rows if r.ad_id == ad.ad_id and r.day in days]
+        if not week_rows:
+            continue
+        spend = round(sum(r.spend for r in week_rows), 2)
+        results = sum(r.results for r in week_rows)
+        impressions = sum(r.impressions for r in week_rows)
+        clicks = sum(r.clicks for r in week_rows)
+        values = {
+            "spend": spend,
+            "results": float(results),
+            "ctr": round(clicks / impressions, 4) if impressions else 0.0,
+            "frequency": max(week_rows, key=lambda r: r.day).frequency,
+            "days_live": float(len(week_rows)),
+        }
+        if results:
+            values["cost_per_result"] = round(spend / results, 2)
+        evidence_id = f"ev-w{week}-{ad.ad_id}-week"
+        evidence.append(
+            Evidence(
+                evidence_id=evidence_id,
+                kind="derived",
+                values=values,
+                inputs=[r.evidence_id for r in week_rows],
+                note=f"{ad.name} ({ad.ad_id}): totals for week {week}.",
+            )
+        )
+        cpr = values.get("cost_per_result")
+        if cpr is not None and results >= 10 and cpr <= 0.85 * target:
+            signals.append(
+                Signal(
+                    subject_id=ad.ad_id,
+                    kind="winner",
+                    severity="watch",
+                    metric="cost_per_result",
+                    value=cpr,
+                    evidence_ids=[evidence_id],
+                    note=f"{ad.name} won the week at ${cpr:g} per result against ${target:g}.",
+                )
+            )
+        elif spend >= 2 * target and (cpr is None or cpr >= 1.25 * target):
+            signals.append(
+                Signal(
+                    subject_id=ad.ad_id,
+                    kind="loser",
+                    severity="act",
+                    metric="cost_per_result" if cpr is not None else "spend",
+                    value=cpr if cpr is not None else spend,
+                    evidence_ids=[evidence_id],
+                    note=f"{ad.name} cost too much this week against the ${target:g} target.",
+                )
+            )
+    return signals, evidence

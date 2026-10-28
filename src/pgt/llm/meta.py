@@ -15,6 +15,10 @@ DEFAULT_MODEL = "muse-spark-1.3"
 # USD per 1M tokens (input, output). Contributor models are cheaper; list price is an upper bound.
 PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (1.25, 4.25)}
 SEARCH_PRICE = 2.50 / 1000
+IMAGE_MODEL = "muse-image-1.0"
+SAM_MODEL = "sam-3.1"
+IMAGE_PRICE = 0.01  # USD per generated image
+SAM_PRICE = 2.50 / 1000  # USD per segmented image
 
 
 def meta_client() -> AsyncOpenAI:

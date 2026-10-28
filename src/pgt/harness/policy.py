@@ -14,7 +14,7 @@ ALLOWLIST: dict[str, set[str]] = {
     "reviewer": {"get_evidence"},
     "strategist": {"web_search"},
     "growth_lead": {"get_account_state", "get_evidence"},
-    "producer": set(),
+    "producer": {"ask_analyst"},
 }
 
 
