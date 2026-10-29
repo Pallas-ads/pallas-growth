@@ -92,13 +92,15 @@ async def _day(world: World, model: Model, user: ScriptedUser) -> WeekResult:
         result.stage = "escalated"
     elif brief.change_set_id:
         record = ws.artifacts.latest(key)
-        result.stage = "awaiting_change_approval"
-        if user("change_set", {**record.content, "blocked": brief.blocked}):
-            change_set = ChangeSet.model_validate(record.content)
-            allowed = [g.change_index for g in change_set.gate if g.allowed]
-            ws.approvals.grant(key, record, actor="user", approved=allowed)
-            apply_change_set(ws, account, key)
-            result.stage = "applied"
+        change_set = ChangeSet.model_validate(record.content)
+        # An empty change set with nothing blocked has nothing to approve.
+        if change_set.changes or brief.blocked:
+            result.stage = "awaiting_change_approval"
+            if user("change_set", {**record.content, "blocked": brief.blocked}):
+                allowed = [g.change_index for g in change_set.gate if g.allowed]
+                ws.approvals.grant(key, record, actor="user", approved=allowed)
+                apply_change_set(ws, account, key)
+                result.stage = "applied"
     result.redos = len(ws.events.list("review.redo", loop_id=loop_id))
     result.blocked_tool_calls = len(ws.events.list("tool.blocked", loop_id=loop_id))
     return result
@@ -146,6 +148,10 @@ async def _week(
                 result.stage = "refused"
 
     result.redos = len(ws.events.list("review.redo", loop_id=f"weekly-w{week}"))
+    if result.stage == "escalated":
+        redos = ws.events.list("review.redo", loop_id=f"weekly-w{week}")
+        last = redos[-1].payload.get("issues", []) if redos else []
+        result.note = " ".join([*summary.escalations, *map(str, last)])
     result.blocked_tool_calls = len(ws.events.list("tool.blocked", loop_id=f"weekly-w{week}"))
     return result
 
