@@ -84,14 +84,58 @@ def make_demo_product_shot(size: int = 1600) -> tuple[Image.Image, Box]:
     width, height = round(size * 0.38), round(size * 0.74)
     x1, y1 = (size - width) // 2, (size - height) // 2
     box = Box(x1, y1, x1 + width, y1 + height, size, size)
+    radius = round(width * 0.13)
+    # A soft shadow, side buttons, a metal rim, a camera and a status bar: SAM 3.1 does not
+    # see a flat dark rectangle as a phone.
+    shadow = Image.new("L", image.size, 0)
+    offset = round(width * 0.04)
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        (x1 + offset, y1 + offset * 2, box.x2 + offset, box.y2 + offset), radius=radius, fill=90
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, round(width * 0.05))))
+    image.paste((150, 146, 138), mask=shadow)
     draw = ImageDraw.Draw(image)
+    nub = max(1, round(width * 0.014))
+    for top, length in ((0.17, 0.09), (0.29, 0.14)):
+        draw.rounded_rectangle(
+            (
+                box.x2 - nub,
+                y1 + round(height * top),
+                box.x2 + nub,
+                y1 + round(height * (top + length)),
+            ),
+            radius=nub,
+            fill=(96, 100, 108),
+        )
     draw.rounded_rectangle(
-        (box.x1, box.y1, box.x2 - 1, box.y2 - 1),
-        radius=round(width * 0.08), fill=(27, 33, 40),
+        (box.x1, box.y1, box.x2 - 1, box.y2 - 1), radius=radius, fill=(120, 124, 132)
+    )
+    rim = max(1, round(width * 0.012))
+    draw.rounded_rectangle(
+        (box.x1 + rim, box.y1 + rim, box.x2 - rim - 1, box.y2 - rim - 1),
+        radius=radius - rim,
+        fill=(18, 20, 24),
     )
     inset = max(2, round(width * 0.045))
     screen = (x1 + inset, y1 + inset, box.x2 - inset - 1, box.y2 - inset - 1)
-    draw.rounded_rectangle(screen, radius=round(width * 0.06), fill=(230, 240, 235))
+    draw.rounded_rectangle(screen, radius=radius - inset, fill=(230, 240, 235))
+    cam = max(1, round(width * 0.028))
+    cx, cy = (box.x1 + box.x2) // 2, y1 + inset + round(height * 0.03)
+    draw.ellipse((cx - cam, cy - cam, cx + cam, cy + cam), fill=(18, 20, 24))
+    status = ImageFont.load_default(size=max(1, round(width * 0.05)))
+    draw.text((x1 + round(width * 0.14), cy), "9:41", font=status, fill=(30, 34, 38), anchor="lm")
+    bw, bh = round(width * 0.08), max(2, round(width * 0.035))
+    bx = box.x2 - round(width * 0.14) - bw
+    draw.rounded_rectangle(
+        (bx, cy - bh // 2, bx + bw, cy + bh // 2), radius=max(1, bh // 4), fill=(30, 34, 38)
+    )
+    home_w, home_h = round(width * 0.34), max(2, round(height * 0.008))
+    home_y = box.y2 - inset - round(height * 0.025)
+    draw.rounded_rectangle(
+        (cx - home_w // 2, home_y, cx + home_w // 2, home_y + home_h),
+        radius=home_h // 2,
+        fill=(30, 34, 38),
+    )
     left = x1 + round(width * 0.12)
     draw.text(
         (left, y1 + round(height * 0.12)), "Pallas Fit",

@@ -84,6 +84,7 @@ class WeekResult:
     images: dict[str, list[CreativeImage]] = field(default_factory=dict)
     redos: int = 0
     blocked_tool_calls: int = 0  # tool calls the arm refused (0 for arms that cannot refuse)
+    note: str = ""  # why the run stopped, when the arm can say (live results only)
 
 
 @dataclass

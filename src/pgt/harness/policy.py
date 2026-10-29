@@ -163,7 +163,7 @@ class SpendCapExceeded(Exception):
 
 class CostMeter:
     def __init__(
-        self, events: EventLog, per_call: float = 0.10,
+        self, events: EventLog, per_call: float = 0.25,
         per_role: float = 0.50, per_loop: float = 2.00,
     ) -> None:
         self._events = events
