@@ -1,4 +1,4 @@
-"""Arm A: the Pallas Growth Team as built, and four ablations that each switch off one part of
+"""Arm A: the Pallas Growth Team as built, and five ablations that each switch off one part of
 the harness. An ablation is a patch over the real code, so everything else stays the same."""
 
 from __future__ import annotations
@@ -16,12 +16,25 @@ from pgt.harness.approvals import Approvals
 from pgt.llm import runtime
 from pgt.llm.fake import MetaFake
 from pgt.llm.media import MediaClient
+from pgt.loops.daily import run_daily_check
 from pgt.loops.weekly import apply_week, plan_week, produce_week
-from pgt.schemas import ChangeSet, CreativeCopy, CreativeReview, CreativeSet, TestPlan
+from pgt.roles.operator import apply_change_set
+from pgt.schemas import (
+    ChangeSet,
+    CreativeCopy,
+    CreativeReview,
+    CreativeSet,
+    GateResult,
+    TestPlan,
+)
 
 
 async def _always_pass(*args, **kwargs) -> CreativeReview:
     return CreativeReview(verdict="pass", issues=[])
+
+
+def _allow_all(changes, state, facts) -> list[GateResult]:
+    return [GateResult(change_index=i, allowed=True, results=[]) for i in range(len(changes))]
 
 
 def _role_writes(world: World) -> list[AbstractContextManager]:
@@ -52,6 +65,7 @@ ABLATIONS: dict[str, Callable[[World], list[AbstractContextManager]]] = {
         patch.object(Approvals, "is_valid", lambda self, key: self._latest_grant(key) is not None)
     ],
     "pgt-role-writes": _role_writes,
+    "pgt-no-gate": lambda world: [patch("pgt.roles.media_buyer.gate_change_set", _allow_all)],
 }
 
 
@@ -61,7 +75,33 @@ async def run(
     with ExitStack() as stack:
         for p in ABLATIONS[arm](world):
             stack.enter_context(p)
+        if scenario.daily_check:
+            return await _day(world, model, user)
         return await _week(world, model, fake, user, scenario)
+
+
+async def _day(world: World, model: Model, user: ScriptedUser) -> WeekResult:
+    """One daily check. The user sees the change set with the brief's blocked list and
+    approves every change the gate allowed. A blocked change needs an explicit override, which
+    a busy owner does not give."""
+    ws, account = world.ws, world.account
+    brief = await run_daily_check(ws, account, model)
+    key, loop_id = f"day{account.day}/change_set", f"daily-d{account.day}"
+    result = WeekResult(stage="no_changes")
+    if brief.review.verdict != "pass":
+        result.stage = "escalated"
+    elif brief.change_set_id:
+        record = ws.artifacts.latest(key)
+        result.stage = "awaiting_change_approval"
+        if user("change_set", {**record.content, "blocked": brief.blocked}):
+            change_set = ChangeSet.model_validate(record.content)
+            allowed = [g.change_index for g in change_set.gate if g.allowed]
+            ws.approvals.grant(key, record, actor="user", approved=allowed)
+            apply_change_set(ws, account, key)
+            result.stage = "applied"
+    result.redos = len(ws.events.list("review.redo", loop_id=loop_id))
+    result.blocked_tool_calls = len(ws.events.list("tool.blocked", loop_id=loop_id))
+    return result
 
 
 async def _week(

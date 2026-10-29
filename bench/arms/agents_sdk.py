@@ -44,6 +44,7 @@ from agents.run_state import RunState
 from pydantic_ai.models import Model
 
 from bench.arms.shared import (
+    DAY_OPERATOR_INSTRUCTIONS,
     MAX_ATTEMPTS,
     OPERATOR_INSTRUCTIONS,
     TEAM_RULES,  # noqa: F401 - re-exported for the test that keeps the rule copies equal
@@ -54,15 +55,22 @@ from bench.arms.shared import (
     analyst_prompt,
     answer_evidence,
     answer_prompt,
+    apply_change,
+    daily_analyst_prompt,
     data_url,
+    day_inputs,
+    day_operator_prompt,
     instructions,
     intake_prompt,
     make_plan,
+    media_buyer_prompt,
     number_insights,
     operator_prompt,
     planned,
     planner_prompt,
     producer_prompt,
+    readout_prompt,
+    readouts_due,
     review_prompt,
     strategist_prompt,
     week_inputs,
@@ -71,9 +79,11 @@ from bench.scenarios import Scenario, tamper_campaign
 from bench.world import ScriptedUser, WeekResult, World
 from pgt.llm.fake import MetaFake
 from pgt.llm.meta import DEFAULT_MODEL
-from pgt.roles import analyst, growth_lead, producer, reviewer, strategist
+from pgt.roles import analyst, growth_lead, media_buyer, producer, reviewer, strategist
 from pgt.schemas import (
     Answer,
+    Change,
+    ChangeSetDraft,
     CreativeCopy,
     CreativeImage,
     CreativeReview,
@@ -81,6 +91,7 @@ from pgt.schemas import (
     MarketResearch,
     PlanTest,
     TestPlanDraft,
+    TestReadout,
     WeeklyBrief,
 )
 
@@ -91,57 +102,152 @@ async def run(
     arm: str, world: World, model: Model, fake: MetaFake, user: ScriptedUser, scenario: Scenario
 ) -> WeekResult:
     try:
+        if scenario.daily_check:
+            return await _day(world, fake, user)
         return await _week(world, fake, user, scenario)
     except Exception as error:  # noqa: BLE001 - a crashed run is a result, not a bench error
         return WeekResult(stage=f"error: {type(error).__name__}")
 
 
-async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scenario) -> WeekResult:
-    inputs = week_inputs(world)
-    week, account = inputs.week, world.account
-    client = fake.client()
-    muse = OpenAIResponsesModel(DEFAULT_MODEL, client)
-    settings = ModelSettings(tool_choice="auto", store=False)
-    blocked: list[str] = []
-    redos: list[str] = []
+class _Team:
+    """The model, run config and approval loop every role shares."""
 
-    def count_blocked(args: ToolErrorFormatterArgs) -> str | None:
+    def __init__(self, fake: MetaFake, inputs) -> None:
+        self.client = fake.client()
+        self.muse = OpenAIResponsesModel(DEFAULT_MODEL, self.client)
+        self.settings = ModelSettings(tool_choice="auto", store=False)
+        self.inputs = inputs
+        self.blocked: list[str] = []
+        self.config = RunConfig(
+            tracing_disabled=True,
+            trace_include_sensitive_data=False,
+            tool_not_found_behavior="return_error_to_model",
+            tool_error_formatter=self._count_blocked,
+        )
+
+    def _count_blocked(self, args: ToolErrorFormatterArgs) -> str | None:
         if args.kind == "tool_not_found":
-            blocked.append(args.tool_name)
+            self.blocked.append(args.tool_name)
         return None  # keep the SDK's own message
 
-    config = RunConfig(
-        tracing_disabled=True,
-        trace_include_sensitive_data=False,
-        tool_not_found_behavior="return_error_to_model",
-        tool_error_formatter=count_blocked,
-    )
-
-    def agent(name: str, role_text: str, output_type: type, **kwargs) -> Agent:
+    def agent(self, name: str, role_text: str, output_type: type, **kwargs) -> Agent:
         return Agent(
             name=name,
-            instructions=instructions(role_text, inputs),
-            model=muse,
-            model_settings=settings,
+            instructions=instructions(role_text, self.inputs),
+            model=self.muse,
+            model_settings=self.settings,
             output_type=output_type,
             **kwargs,
         )
 
-    async def ask(role: Agent, prompt: str | list):
-        result = await Runner.run(role, prompt, run_config=config)
+    def operator(self, text: str, tool) -> Agent:
+        """The operator gets only its own short instructions and its one tool."""
+        return Agent(
+            name="operator",
+            instructions=text,
+            model=self.muse,
+            model_settings=self.settings,
+            output_type=OperatorReport,
+            tools=[tool],
+        )
+
+    async def ask(self, role: Agent, prompt: str | list):
+        result = await Runner.run(role, prompt, run_config=self.config)
         return result.final_output_as(role.output_type, raise_if_incorrect_type=True)
+
+    def evidence_tool(self):
+        ledger = self.inputs.ledger
+
+        @function_tool
+        def get_evidence(evidence_id: str) -> str:
+            """Look up one evidence record by its ID."""
+            values = ledger.get(evidence_id)
+            return json.dumps(values) if values is not None else f"No evidence {evidence_id}."
+
+        return get_evidence
+
+    async def operate(
+        self, operator: Agent, prompt: str, user: ScriptedUser, shown, tamper=None
+    ) -> str:
+        """Runs the operator, stopping at each approval for the user. `shown` turns the tool's
+        arguments into what the user sees. Returns the stage the run ended in."""
+        run_result = await Runner.run(operator, prompt, run_config=self.config)
+        while run_result.interruptions:
+            run_state = run_result.to_state()
+            for item in run_result.interruptions:
+                if not user("change_set", shown(json.loads(item.arguments or "{}"))):
+                    return "awaiting_change_approval"
+                run_state.approve(item)
+            saved = run_state.to_json()
+            if tamper:
+                tamper(saved)
+            try:
+                resumed = await RunState.from_json(operator, saved)
+                run_result = await Runner.run(operator, resumed, run_config=self.config)
+            except ModelBehaviorError:
+                return "refused"
+        return "done"
+
+
+async def _day(world: World, fake: MetaFake, user: ScriptedUser) -> WeekResult:
+    """The daily check: Analyst (and a readout for each test that is due), Media Buyer, then
+    the operator's apply_changes tool with the SDK's tool approval. The house rules are in
+    every prompt; nothing checks them in code."""
+    inputs = day_inputs(world)
+    team = _Team(fake, inputs)
+    get_evidence = team.evidence_tool()
+    findings: Findings = await team.ask(
+        team.agent("analyst", analyst.INSTRUCTIONS, Findings, tools=[get_evidence]),
+        daily_analyst_prompt(inputs),
+    )
+    acting_on = [f for f in findings.findings if f.severity != "info"]
+    for test_id, evidence_id in readouts_due(inputs):
+        readout: TestReadout = await team.ask(
+            team.agent("analyst", analyst.INSTRUCTIONS, TestReadout),
+            readout_prompt(inputs, test_id, evidence_id),
+        )
+        acting_on += readout.findings
+    draft: ChangeSetDraft = await team.ask(
+        team.agent("media_buyer", media_buyer.INSTRUCTIONS, ChangeSetDraft, tools=[get_evidence]),
+        media_buyer_prompt(inputs, acting_on),
+    )
+    result = WeekResult(stage="no_changes")
+    if draft.changes:
+        applied: list[Change] = []
+
+        @function_tool(needs_approval=True)
+        def apply_changes(changes: list[Change]) -> str:
+            """Apply these budget and ad status changes in the sandbox account."""
+            for change in changes:
+                apply_change(world.account, change)
+                applied.append(change)
+            return f"Applied {len(changes)} change(s)."
+
+        operator = team.operator(DAY_OPERATOR_INSTRUCTIONS, apply_changes)
+        stage = await team.operate(
+            operator,
+            day_operator_prompt(inputs.day, draft.changes),
+            user,
+            lambda args: {"ad_drafts": [], "changes": args.get("changes", [])},
+        )
+        result.stage = stage if stage != "done" else "applied" if applied else "no_changes"
+    result.blocked_tool_calls = len(team.blocked)
+    return result
+
+
+async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scenario) -> WeekResult:
+    inputs = week_inputs(world)
+    week, account = inputs.week, world.account
+    team = _Team(fake, inputs)
+    client, agent, ask = team.client, team.agent, team.ask
+    redos: list[str] = []
 
     # --- Plan: intake, then analyst and strategist in parallel, then the test plan ---
     brief: WeeklyBrief = await ask(
         agent("growth_lead", growth_lead.INSTRUCTIONS, WeeklyBrief), intake_prompt(inputs)
     )
 
-    @function_tool
-    def get_evidence(evidence_id: str) -> str:
-        """Look up one evidence record by its ID."""
-        values = inputs.ledger.get(evidence_id)
-        return json.dumps(values) if values is not None else f"No evidence {evidence_id}."
-
+    get_evidence = team.evidence_tool()
     findings, research = await asyncio.gather(
         ask(
             agent("analyst", analyst.INSTRUCTIONS, Findings, tools=[get_evidence]),
@@ -236,7 +342,7 @@ async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scen
         result.creatives[test.test_id] = ad_copy
         result.images[test.test_id] = images
     result.redos = len(redos)
-    result.blocked_tool_calls = len(blocked)
+    result.blocked_tool_calls = len(team.blocked)
     if not passed:
         result.stage = "escalated"
         return result
@@ -252,35 +358,16 @@ async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scen
         return f"Created {len(ads)} PAUSED ad(s)."
 
     drafts = ad_drafts([(t, c) for t, (c, _) in passed])
-    operator = Agent(
-        name="operator",
-        instructions=OPERATOR_INSTRUCTIONS,
-        model=muse,
-        model_settings=settings,
-        output_type=OperatorReport,
-        tools=[create_ads],
+    operator = team.operator(OPERATOR_INSTRUCTIONS, create_ads)
+    stage = await team.operate(
+        operator,
+        operator_prompt(week, drafts),
+        user,
+        lambda args: {"ad_drafts": args.get("ads", []), "changes": []},
+        _tamper if scenario.tamper_after_approval else None,
     )
-    run_result = await Runner.run(operator, operator_prompt(week, drafts), run_config=config)
-    result.stage = "awaiting_change_approval"
-    while run_result.interruptions:
-        run_state = run_result.to_state()
-        for item in run_result.interruptions:
-            args = json.loads(item.arguments or "{}")
-            if not user("change_set", {"ad_drafts": args.get("ads", []), "changes": []}):
-                return result
-            run_state.approve(item)
-        saved = run_state.to_json()
-        if scenario.tamper_after_approval:
-            _tamper(saved)
-        try:
-            resumed = await RunState.from_json(operator, saved)
-            run_result = await Runner.run(operator, resumed, run_config=config)
-        except ModelBehaviorError:
-            result.stage = "refused"
-            break
-    else:
-        result.stage = "applied" if created else "no_ads_created"
-    result.blocked_tool_calls = len(blocked)
+    result.stage = stage if stage != "done" else "applied" if created else "no_ads_created"
+    result.blocked_tool_calls = len(team.blocked)
     return result
 
 
