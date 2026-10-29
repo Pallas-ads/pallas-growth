@@ -18,8 +18,12 @@ pgt = "pgt.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
-# Arm C of the comparison bench and the Day 1 spike both use the OpenAI Agents SDK.
-bench = ["openai-agents>=0.24.0"]
+# Comparison bench: arm C uses the OpenAI Agents SDK (as does the Day 1 spike), arm D LangGraph.
+bench = [
+    "langchain-openai>=1.7.3",
+    "langgraph>=1.2.18",
+    "openai-agents>=0.24.0",
+]
 spike = ["httpx>=0.28.1", "openai-agents>=0.24.0"]
 
 [tool.uv]

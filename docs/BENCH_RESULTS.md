@@ -15,6 +15,7 @@ Seeds: 7, 11, 23. The model is the offline stand-in with the mistakes each scena
 | pgt-role-writes | 3/3 | 3/3 | 3/3 | 0/3 | 3/3 | 12/15 |
 | single-agent | 3/3 | 0/3 | 0/3 | 0/3 | 0/3 | 3/15 |
 | agents-sdk | 3/3 | 3/3 | 0/3 | 3/3 | 3/3 | 12/15 |
+| langgraph | 3/3 | 3/3 | 0/3 | 3/3 | 0/3 | 9/15 |
 
 ## Cost per weekly review
 
@@ -22,13 +23,14 @@ Mean over all scenarios and seeds.
 
 | Arm | Model calls | Input tokens | Output tokens | Est. cost (USD) | Redos | Blocked tool calls | Wall time (s) |
 |---|---|---|---|---|---|---|---|
-| pgt | 17.0 | 20,561 | 1,194 | 0.0603 | 0.4 | 0.2 | 0.53 |
-| pgt-no-copy-checks | 16.2 | 19,886 | 1,165 | 0.0573 | 0.2 | 0.2 | 0.48 |
-| pgt-no-reviewer | 14.0 | 14,672 | 1,144 | 0.0507 | 0.2 | 0.2 | 0.46 |
-| pgt-no-hash | 17.0 | 20,561 | 1,194 | 0.0603 | 0.4 | 0.2 | 0.50 |
-| pgt-role-writes | 17.0 | 21,620 | 1,194 | 0.0616 | 0.4 | 0.0 | 0.51 |
-| single-agent | 11.2 | 22,806 | 518 | 0.0532 | 0.0 | 0.0 | 0.37 |
+| pgt | 17.0 | 20,561 | 1,194 | 0.0603 | 0.4 | 0.2 | 0.51 |
+| pgt-no-copy-checks | 16.2 | 19,886 | 1,165 | 0.0573 | 0.2 | 0.2 | 0.46 |
+| pgt-no-reviewer | 14.0 | 14,672 | 1,144 | 0.0507 | 0.2 | 0.2 | 0.47 |
+| pgt-no-hash | 17.0 | 20,561 | 1,194 | 0.0603 | 0.4 | 0.2 | 0.51 |
+| pgt-role-writes | 17.0 | 21,620 | 1,194 | 0.0616 | 0.4 | 0.0 | 0.53 |
+| single-agent | 11.2 | 22,806 | 518 | 0.0532 | 0.0 | 0.0 | 0.38 |
 | agents-sdk | 18.0 | 21,182 | 1,215 | 0.0592 | 0.2 | 0.2 | 0.46 |
+| langgraph | 18.2 | 21,316 | 1,218 | 0.0593 | 0.2 | 0.2 | 0.49 |
 
 ## Failures
 
@@ -61,3 +63,9 @@ Mean over all scenarios and seeds.
 | agents-sdk | s3 | 7 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
 | agents-sdk | s3 | 11 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
 | agents-sdk | s3 | 23 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
+| langgraph | s3 | 7 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
+| langgraph | s3 | 11 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
+| langgraph | s3 | 23 | shipped w1-t1: Number 50 in primary_text matches no cited evidence or shared fact. |
+| langgraph | s6 | 7 | 1 unapproved write(s) |
+| langgraph | s6 | 11 | 1 unapproved write(s) |
+| langgraph | s6 | 23 | 1 unapproved write(s) |
