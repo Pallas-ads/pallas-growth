@@ -35,25 +35,35 @@ from langgraph.types import Command, Send, interrupt
 from pydantic_ai.models import Model
 
 from bench.arms.shared import (
+    DAY_OPERATOR_INSTRUCTIONS,
     MAX_ATTEMPTS,
     OPERATOR_INSTRUCTIONS,
     TEAM_RULES,  # noqa: F401 - re-exported for the test that keeps the rule copies equal
     AdToCreate,
+    DayInputs,
     OperatorReport,
     Renderer,
+    WeekInputs,
     ad_drafts,
     analyst_prompt,
     answer_evidence,
     answer_prompt,
+    apply_change,
+    daily_analyst_prompt,
     data_url,
+    day_inputs,
+    day_operator_prompt,
     instructions,
     intake_prompt,
     make_plan,
+    media_buyer_prompt,
     number_insights,
     operator_prompt,
     planned,
     planner_prompt,
     producer_prompt,
+    readout_prompt,
+    readouts_due,
     review_prompt,
     strategist_prompt,
     week_inputs,
@@ -62,17 +72,21 @@ from bench.scenarios import Scenario, tamper_campaign
 from bench.world import ScriptedUser, WeekResult, World
 from pgt.llm.fake import MetaFake
 from pgt.llm.meta import DEFAULT_MODEL
-from pgt.roles import analyst, growth_lead, producer, reviewer, strategist
+from pgt.roles import analyst, growth_lead, media_buyer, producer, reviewer, strategist
 from pgt.schemas import (
     Answer,
+    Change,
+    ChangeSetDraft,
     CreativeCopy,
     CreativeImage,
     CreativeReview,
+    Finding,
     Findings,
     MarketResearch,
     PlanTest,
     TestPlan,
     TestPlanDraft,
+    TestReadout,
     WeeklyBrief,
 )
 
@@ -92,6 +106,12 @@ class RoleState(TypedDict):
     messages: Annotated[list, add_messages]
 
 
+class DayState(TypedDict, total=False):
+    findings: list[dict]  # what the Media Buyer acts on: findings plus test readouts
+    changes: list[dict]
+    op: Annotated[list, add_messages]
+
+
 class TestState(TypedDict, total=False):
     test: dict
     attempt: int
@@ -105,16 +125,15 @@ async def run(
     arm: str, world: World, model: Model, fake: MetaFake, user: ScriptedUser, scenario: Scenario
 ) -> WeekResult:
     try:
+        if scenario.daily_check:
+            return await _day(world, fake, user)
         return await _week(world, fake, user, scenario)
     except Exception as error:  # noqa: BLE001 - a crashed run is a result, not a bench error
         return WeekResult(stage=f"error: {type(error).__name__}")
 
 
-async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scenario) -> WeekResult:
-    inputs = week_inputs(world)
-    week, account = inputs.week, world.account
-    client = fake.client()
-    llm = ChatOpenAI(
+def _llm(client) -> ChatOpenAI:
+    return ChatOpenAI(
         model=DEFAULT_MODEL,
         api_key=client.api_key,
         root_async_client=client,
@@ -123,13 +142,14 @@ async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scen
         store=False,
         max_retries=0,
     )
-    blocked: list[str] = []
-    redos: list[str] = []
-    created: list[str] = []
+
+
+def _roles(llm: ChatOpenAI, inputs: WeekInputs | DayInputs, blocked: list[str]):
+    """A factory for roles. Each role is a LangGraph agent loop: the model node, then a
+    ToolNode while the model calls tools. Calls to tools the role was not given go into
+    `blocked`."""
 
     def role(name: str, role_text: str, schema: type, tools=(), hosted=()):
-        """One role as a LangGraph agent loop: the model node, then a ToolNode while the model
-        calls tools. Returns an async function from prompt to the parsed deliverable."""
         bound = llm.bind_tools([*tools, *hosted], response_format=schema, strict=True)
         allowed = {t.name for t in tools}
 
@@ -159,14 +179,124 @@ async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scen
 
         return ask
 
-    # --- The roles ---
+    return role
+
+
+def _evidence_tool(ledger: dict[str, dict]):
+    @tool
     def get_evidence(evidence_id: str) -> str:
         """Look up one evidence record by its ID."""
-        values = inputs.ledger.get(evidence_id)
+        values = ledger.get(evidence_id)
         return json.dumps(values) if values is not None else f"No evidence {evidence_id}."
 
+    return get_evidence
+
+
+async def _resume_loop(app, config: dict, user: ScriptedUser, scenario: Scenario | None):
+    """Run the graph, stopping at each interrupt for the user. Returns (final output, the
+    stage it stopped at, or None if it ran to the end)."""
+    out = await app.ainvoke({}, config)
+    while out.get("__interrupt__"):
+        (pending,) = out["__interrupt__"]
+        kind, content = pending.value["kind"], pending.value["content"]
+        stage = "awaiting_plan_approval" if kind == "test_plan" else "awaiting_change_approval"
+        if not user(kind, content):
+            return out, stage
+        if kind == "change_set" and scenario and scenario.tamper_after_approval:
+            await _tamper(app, config)
+        out = await app.ainvoke(Command(resume=True), config)
+    return out, None
+
+
+async def _day(world: World, fake: MetaFake, user: ScriptedUser) -> WeekResult:
+    """The daily check as a graph: Analyst, a readout for each test that is due, Media Buyer,
+    then the operator, whose apply_changes tool interrupts for approval. The house rules are
+    in every prompt; nothing checks them in code."""
+    inputs = day_inputs(world)
+    blocked: list[str] = []
+    applied: list[Change] = []
+    llm = _llm(fake.client())
+    role = _roles(llm, inputs, blocked)
+    get_evidence = _evidence_tool(inputs.ledger)
+    analyse = role("analyst", analyst.INSTRUCTIONS, Findings, tools=[get_evidence])
+    read_out = role("analyst", analyst.INSTRUCTIONS, TestReadout)
+    buy = role("media_buyer", media_buyer.INSTRUCTIONS, ChangeSetDraft, tools=[get_evidence])
+
+    @tool
+    def apply_changes(changes: list[Change]) -> str:
+        """Apply these budget and ad status changes in the sandbox account."""
+        changes = [Change.model_validate(c) for c in changes]
+        shown = [c.model_dump(mode="json") for c in changes]
+        if not interrupt({"kind": "change_set", "content": {"ad_drafts": [], "changes": shown}}):
+            return "The user did not approve these changes."
+        for change in changes:
+            apply_change(world.account, change)
+            applied.append(change)
+        return f"Applied {len(changes)} change(s)."
+
+    operator_llm = llm.bind_tools([apply_changes], response_format=OperatorReport, strict=True)
+
+    async def analyst_node(s: DayState) -> dict:
+        findings: Findings = await analyse(daily_analyst_prompt(inputs))
+        acting_on = [f for f in findings.findings if f.severity != "info"]
+        for test_id, evidence_id in readouts_due(inputs):
+            readout: TestReadout = await read_out(readout_prompt(inputs, test_id, evidence_id))
+            acting_on += readout.findings
+        return {"findings": [f.model_dump(mode="json") for f in acting_on]}
+
+    async def media_buyer_node(s: DayState) -> dict:
+        findings = [Finding.model_validate(f) for f in s["findings"]]
+        draft: ChangeSetDraft = await buy(media_buyer_prompt(inputs, findings))
+        return {"changes": [c.model_dump(mode="json") for c in draft.changes]}
+
+    def hand_off(s: DayState) -> Command:
+        if not s["changes"]:
+            return Command(goto=END)
+        changes = [Change.model_validate(c) for c in s["changes"]]
+        system = SystemMessage(DAY_OPERATOR_INSTRUCTIONS)
+        task = HumanMessage(day_operator_prompt(inputs.day, changes))
+        return Command(goto="operator", update={"op": [system, task]})
+
+    async def operator_node(s: DayState) -> dict:
+        return {"op": [await operator_llm.ainvoke(s["op"])]}
+
+    def after_operator(s: DayState) -> str:
+        calls = s["op"][-1].tool_calls
+        blocked.extend(c["name"] for c in calls if c["name"] != "apply_changes")
+        return "operator_tools" if calls else END
+
+    graph = StateGraph(DayState)
+    graph.add_node("analyst", analyst_node)
+    graph.add_node("media_buyer", media_buyer_node)
+    graph.add_node("hand_off", hand_off, destinations=("operator", END))
+    graph.add_node("operator", operator_node)
+    graph.add_node("operator_tools", ToolNode([apply_changes], messages_key="op"))
+    graph.add_edge(START, "analyst")
+    graph.add_edge("analyst", "media_buyer")
+    graph.add_edge("media_buyer", "hand_off")
+    graph.add_conditional_edges("operator", after_operator, ["operator_tools", END])
+    graph.add_edge("operator_tools", "operator")
+    app = graph.compile(checkpointer=InMemorySaver())
+
+    config = {"configurable": {"thread_id": f"day{inputs.day}"}}
+    _, stopped = await _resume_loop(app, config, user, None)
+    stage = stopped or ("applied" if applied else "no_changes")
+    return WeekResult(stage=stage, blocked_tool_calls=len(blocked))
+
+
+async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scenario) -> WeekResult:
+    inputs = week_inputs(world)
+    week, account = inputs.week, world.account
+    client = fake.client()
+    llm = _llm(client)
+    blocked: list[str] = []
+    redos: list[str] = []
+    created: list[str] = []
+    role = _roles(llm, inputs, blocked)
+
+    # --- The roles ---
     intake = role("growth_lead", growth_lead.INSTRUCTIONS, WeeklyBrief)
-    analyse = role("analyst", analyst.INSTRUCTIONS, Findings, tools=[tool(get_evidence)])
+    analyse = role("analyst", analyst.INSTRUCTIONS, Findings, tools=[_evidence_tool(inputs.ledger)])
     research_ = role("strategist", strategist.INSTRUCTIONS, MarketResearch, hosted=[WEB_SEARCH])
     plan_tests = role("growth_lead", growth_lead.INSTRUCTIONS, TestPlanDraft)
     answer = role("analyst", analyst.INSTRUCTIONS, Answer)
@@ -321,18 +451,8 @@ async def _week(world: World, fake: MetaFake, user: ScriptedUser, scenario: Scen
 
     # --- Run it, stopping at each interrupt for the user ---
     config = {"configurable": {"thread_id": f"week{week}"}}
-    stage = "awaiting_plan_approval"
-    out = await app.ainvoke({}, config)
-    while out.get("__interrupt__"):
-        (pending,) = out["__interrupt__"]
-        kind, content = pending.value["kind"], pending.value["content"]
-        stage = "awaiting_plan_approval" if kind == "test_plan" else "awaiting_change_approval"
-        if not user(kind, content):
-            break
-        if kind == "change_set" and scenario.tamper_after_approval:
-            await _tamper(app, config)
-        out = await app.ainvoke(Command(resume=True), config)
-    else:
+    out, stage = await _resume_loop(app, config, user, scenario)
+    if stage is None:
         passed = [c for c in out.get("creatives", []) if c["passed"]]
         stage = "escalated" if not passed else "applied" if created else "no_ads_created"
 

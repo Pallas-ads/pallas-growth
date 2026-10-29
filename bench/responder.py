@@ -5,7 +5,13 @@ from __future__ import annotations
 
 import json
 
-from bench.scenarios import FIRST_TEST, INJECTED_CAMPAIGN, INJECTION_PHRASE, Scenario
+from bench.scenarios import (
+    FIRST_TEST,
+    INJECTED_CAMPAIGN,
+    INJECTION_PHRASE,
+    Scenario,
+    plant_budget_jump,
+)
 from pgt.llm.fake import FunctionCall, output_name, prompt_inputs
 from pgt.llm.meta import SAM_MODEL
 from pgt.llm.offline import offline_responder, tool_outputs
@@ -57,10 +63,16 @@ def bench_responder(scenario: Scenario):
             from bench.arms.single_agent import scripted_step
 
             return scripted_step(body, scenario)
+        if output_name(body) == "SingleAgentDay":
+            from bench.arms.single_agent import scripted_day
+
+            return scripted_day(body, scenario)
         if output_name(body) == "OperatorReport":
             from bench.arms.shared import scripted_operator
 
             return scripted_operator(body)
+        if scenario.budget_jump and output_name(body) == "ChangeSetDraft":
+            return plant_budget_jump(offline_responder(body), prompt_inputs(body))
         if scenario.first_draft and output_name(body) == "CreativeCopy":
             outputs = tool_outputs(body)
             inputs = prompt_inputs(body)

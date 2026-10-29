@@ -1,5 +1,5 @@
 """What arms C and D share: the prompts, the budget split, image rendering and the operator's
-offline script. None of it belongs to a framework, so both arms send the model the same words.
+offline script, for the weekly review and the daily check. None of it belongs to a framework, so both arms send the model the same words.
 Nothing here imports pgt.harness."""
 
 from __future__ import annotations
@@ -28,11 +28,13 @@ from pgt.creative.compose import (
 from pgt.llm.fake import FunctionCall, prompt_inputs
 from pgt.llm.meta import IMAGE_MODEL, SAM_MODEL
 from pgt.loops.weekly import carried_signals
-from pgt.roles.metrics import weekly_signals
+from pgt.roles.metrics import READOUT_RULE, compute_signals, weekly_signals
 from pgt.schemas import (
     CREATIVE_SIZES,
+    Change,
     CreativeCopy,
     CreativeImage,
+    Finding,
     Findings,
     MarketResearch,
     PlanTest,
@@ -57,6 +59,9 @@ Team rules:
 
 OPERATOR_INSTRUCTIONS = """You are the Operator. Create exactly the ads you are given, PAUSED,
 with one call to create_ads. Do nothing else."""
+
+DAY_OPERATOR_INSTRUCTIONS = """You are the Operator. Apply exactly the changes you are given
+with one call to apply_changes. Do nothing else."""
 
 
 class AdToCreate(BaseModel):
@@ -130,7 +135,7 @@ def week_inputs(world: World) -> WeekInputs:
     )
 
 
-def instructions(role_text: str, inputs: WeekInputs) -> str:
+def instructions(role_text: str, inputs: WeekInputs | DayInputs) -> str:
     return f"{role_text.strip()}\n\n{inputs.instructions_tail}"
 
 
@@ -298,6 +303,97 @@ def operator_prompt(week: int, drafts: list[AdToCreate]) -> str:
     )
 
 
+# --- The daily check: the same inputs and words as PGT's Analyst and Media Buyer --------------
+
+
+@dataclass
+class DayInputs:
+    day: int
+    instructions_tail: str
+    state: object
+    signals: list
+    evidence: list
+    ledger: dict[str, dict]
+    target_cost_per_result: float
+
+
+def day_inputs(world: World) -> DayInputs:
+    facts = world.ws.facts.current()
+    state = world.account.state()
+    rows = world.account.insights()
+    signals, evidence = compute_signals(state.day, state, rows, facts)
+    ledger = {r.evidence_id: r.model_dump(mode="json") for r in rows}
+    ledger |= {e.evidence_id: e.values for e in evidence}
+    facts_json = json.dumps(facts.model_dump(mode="json"), indent=1, sort_keys=True)
+    return DayInputs(
+        day=state.day,
+        instructions_tail=f"{TEAM_RULES}\n\nShared facts:\n{facts_json}",
+        state=state,
+        signals=signals,
+        evidence=evidence,
+        ledger=ledger,
+        target_cost_per_result=facts.target_cost_per_result,
+    )
+
+
+def daily_analyst_prompt(inputs: DayInputs) -> str:
+    return prompt(
+        f"Write the findings for day {inputs.day}. Cover every act and watch signal; add info "
+        "findings only when they change what the team should do today.",
+        "Each finding has subject_id, a one-sentence claim, the metric name, a value copied "
+        "from its cited evidence, the evidence_ids, and a severity matching the signal.",
+        {
+            "day": inputs.day,
+            "signals": [s.model_dump(mode="json") for s in inputs.signals],
+            "evidence": {e.evidence_id: e.values for e in inputs.evidence},
+        },
+    )
+
+
+def readouts_due(inputs: DayInputs) -> list[tuple[str, str]]:
+    """(test_id, evidence_id) for each test due for a readout today."""
+    return [(s.subject_id, s.evidence_ids[0]) for s in inputs.signals if s.kind == "test_due"]
+
+
+def readout_prompt(inputs: DayInputs, test_id: str, evidence_id: str) -> str:
+    return prompt(
+        f"Read out test {test_id}. {READOUT_RULE}",
+        "The recommendation follows the rule, the rationale quotes cost per result against "
+        "target, and each finding cites the readout evidence.",
+        {"test_id": test_id, "evidence": {evidence_id: inputs.ledger[evidence_id]}},
+    )
+
+
+def media_buyer_prompt(inputs: DayInputs, findings: list[Finding]) -> str:
+    return prompt(
+        f"Propose today's changes for day {inputs.day}, based on the findings.",
+        "Each change has a kind, target_id, new_daily_budget (null unless set_budget), a "
+        "one-sentence reason, and the evidence_ids from the findings it acts on.",
+        {
+            "day": inputs.day,
+            "target_cost_per_result": inputs.target_cost_per_result,
+            "findings": [f.model_dump(mode="json") for f in findings],
+            "account": inputs.state.model_dump(mode="json"),
+        },
+    )
+
+
+def day_operator_prompt(day: int, changes: list[Change]) -> str:
+    return prompt(
+        f"Apply the approved changes for day {day}.",
+        "apply_changes was called once with exactly these changes.",
+        {"changes": [c.model_dump(mode="json") for c in changes]},
+    )
+
+
+def apply_change(account, change: Change) -> None:
+    writer = account.writer()
+    if change.kind == "set_budget":
+        writer.set_campaign_budget(change.target_id, change.new_daily_budget)
+    else:
+        writer.set_ad_status(change.target_id, "PAUSED" if change.kind == "pause_ad" else "ACTIVE")
+
+
 # --- Images: SAM once, then each ad rendered in every size ---------------------------------------
 
 
@@ -360,7 +456,12 @@ class Renderer:
 
 
 def scripted_operator(body: dict):
-    """The operator's next move offline: one create_ads call with the ads it was given."""
-    if "create_ads" not in [c["name"] for c in called_tools(body)]:
-        return FunctionCall("create_ads", {"ads": prompt_inputs(body)["ads"]})
+    """The operator's next move offline: one call with the ads or changes it was given."""
+    inputs, called = prompt_inputs(body), [c["name"] for c in called_tools(body)]
+    if "changes" in inputs:
+        if "apply_changes" not in called:
+            return FunctionCall("apply_changes", {"changes": inputs["changes"]})
+        return OperatorReport(summary="Applied the approved changes.")
+    if "create_ads" not in called:
+        return FunctionCall("create_ads", {"ads": inputs["ads"]})
     return OperatorReport(summary="Created the approved ads, PAUSED.")

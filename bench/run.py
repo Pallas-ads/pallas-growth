@@ -23,7 +23,7 @@ os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 from bench.arms import agents_sdk, langgraph_team, pgt, single_agent
 from bench.grader import Grade, grade
 from bench.responder import bench_responder
-from bench.scenarios import BY_KEY, SCENARIOS, Scenario
+from bench.scenarios import BUDGET_CAMPAIGN, BY_KEY, SCENARIOS, Scenario
 from bench.world import ScriptedUser, WeekResult, build_world
 from pgt.llm.offline import offline_model
 
@@ -38,7 +38,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 async def run_one(arm: str, scenario: Scenario, seed: int, media_root: Path) -> Grade:
-    world = await build_world(seed, scenario.plant_injection, media_root / arm / scenario.key)
+    world = await build_world(
+        seed,
+        scenario.plant_injection,
+        media_root / arm / scenario.key,
+        raise_yesterday=BUDGET_CAMPAIGN if scenario.budget_jump else None,
+    )
     model, fake = offline_model(responder=bench_responder(scenario))
     user = ScriptedUser()
     started = time.perf_counter()
@@ -62,6 +67,36 @@ async def run_all(arms: list[str], scenarios: list[Scenario], seeds: list[int]) 
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def _cost_table(title: str, grades: list[Grade], arms: list[str], keys: set[str]) -> list[str]:
+    lines = [
+        "",
+        f"## {title}",
+        "",
+        (
+            f"Mean over {'scenarios' if len(keys) > 1 else 'scenario'} "
+            f"{', '.join(sorted(keys))} and all seeds."
+        ),
+        "",
+        (
+            "| Arm | Model calls | Input tokens | Output tokens | Est. cost (USD) | Redos | "
+            "Blocked tool calls | Wall time (s) |"
+        ),
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for arm in arms:
+        cell = [g for g in grades if g.arm == arm]
+        lines.append(
+            f"| {arm} | {_mean([g.calls for g in cell]):.1f} "
+            f"| {_mean([g.input_tokens for g in cell]):,.0f} "
+            f"| {_mean([g.output_tokens for g in cell]):,.0f} "
+            f"| {_mean([g.cost for g in cell]):.4f} "
+            f"| {_mean([g.redos for g in cell]):.1f} "
+            f"| {_mean([g.blocked_tool_calls for g in cell]):.1f} "
+            f"| {_mean([g.wall_time_s for g in cell]):.2f} |"
+        )
+    return lines
 
 
 def markdown(grades: list[Grade], arms: list[str], scenarios: list[Scenario]) -> str:
@@ -90,29 +125,11 @@ def markdown(grades: list[Grade], arms: list[str], scenarios: list[Scenario]) ->
             total, passed = total + len(cell), passed + ok
             row.append(f"{ok}/{len(cell)}")
         lines.append(f"| {arm} | " + " | ".join(row) + f" | {passed}/{total} |")
-    lines += [
-        "",
-        "## Cost per weekly review",
-        "",
-        "Mean over all scenarios and seeds.",
-        "",
-        (
-            "| Arm | Model calls | Input tokens | Output tokens | Est. cost (USD) | Redos | "
-            "Blocked tool calls | Wall time (s) |"
-        ),
-        "|---|---|---|---|---|---|---|---|",
-    ]
-    for arm in arms:
-        cell = [g for g in grades if g.arm == arm]
-        lines.append(
-            f"| {arm} | {_mean([g.calls for g in cell]):.1f} "
-            f"| {_mean([g.input_tokens for g in cell]):,.0f} "
-            f"| {_mean([g.output_tokens for g in cell]):,.0f} "
-            f"| {_mean([g.cost for g in cell]):.4f} "
-            f"| {_mean([g.redos for g in cell]):.1f} "
-            f"| {_mean([g.blocked_tool_calls for g in cell]):.1f} "
-            f"| {_mean([g.wall_time_s for g in cell]):.2f} |"
-        )
+    weekly = {s.key for s in scenarios if not s.daily_check}
+    daily = {s.key for s in scenarios if s.daily_check}
+    for title, keys in (("Cost per weekly review", weekly), ("Cost per daily check", daily)):
+        if keys:
+            lines += _cost_table(title, [g for g in grades if g.scenario in keys], arms, keys)
     failures = [g for g in grades if not g.passed]
     lines += ["", "## Failures", ""]
     if not failures:
