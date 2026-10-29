@@ -58,7 +58,7 @@ def bench_responder(scenario: Scenario):
 
             return scripted_step(body, scenario)
         if output_name(body) == "OperatorReport":
-            from bench.arms.agents_sdk import scripted_operator
+            from bench.arms.shared import scripted_operator
 
             return scripted_operator(body)
         if scenario.first_draft and output_name(body) == "CreativeCopy":
