@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
-from pydantic import BaseModel
-from pydantic_ai import Agent, NativeOutput
+from pydantic import BaseModel, ValidationError
+from pydantic_ai import Agent, ModelRetry, NativeOutput, TextOutput, ToolOutput
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.capabilities.abstract import WrapModelRequestHandler, WrapToolExecuteHandler
 from pydantic_ai.messages import (
@@ -19,12 +19,14 @@ from pydantic_ai.messages import (
     WebCitationSource,
 )
 from pydantic_ai.models import Model, ModelRequestContext
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.tools import RunContext, ToolDefinition
 
 from pgt.harness.context import ContextPack
 from pgt.harness.policy import CostMeter, check_tool
 from pgt.harness.workspace import Workspace
 from pgt.llm.meta import estimate_cost
+from pgt.llm.routing import RoleRouter, resolve
 
 
 @dataclass
@@ -44,6 +46,32 @@ class RoleRun[T: BaseModel]:
     output: T
     searches: int = 0
     citations: list[tuple[str, str]] = field(default_factory=list)  # (title, url)
+
+
+def _output_spec[T: BaseModel](model: Model, output_type: type[T], tools: list):
+    """Strict JSON schema output, except on Chat Completions (Baseten) when the role has tools.
+    There the server enforces neither response_format nor tool_choice="required" once tools are
+    in the request, so the deliverable comes back as a call to a strict final_result tool, and a
+    plain-text answer is still accepted when it is the same JSON (code fences allowed)."""
+    if tools and isinstance(model, OpenAIChatModel):
+        return [ToolOutput(output_type, strict=True), TextOutput(_json_text(output_type))]
+    return NativeOutput(output_type, strict=True)
+
+
+def _json_text[T: BaseModel](output_type: type[T]):
+    def parse(text: str) -> T:
+        body = text.strip()
+        if body.startswith("```"):
+            body = body.split("\n", 1)[-1].rsplit("```", 1)[0]
+        try:
+            return output_type.model_validate_json(body)
+        except ValidationError as e:
+            raise ModelRetry(
+                f"Call final_result with the {output_type.__name__} object. {e}"
+            ) from e
+
+    parse.__annotations__["return"] = output_type
+    return parse
 
 
 class _Harness(AbstractCapability):
@@ -80,12 +108,15 @@ class _Harness(AbstractCapability):
         self.searches += searches
         return searches
 
-    def _block_disallowed(self, response: ModelResponse) -> None:
+    def _block_disallowed(self, response: ModelResponse, output_tools: set[str]) -> None:
         """Log every call the model makes to a tool outside the role's allowlist, including
-        tools the role was never given (a prompt injection asking for a write tool, say)."""
+        tools the role was never given (a prompt injection asking for a write tool, say).
+        Output tools (final_result, how a role hands in its deliverable on Baseten) are not
+        role tools and are not checked."""
         for part in response.parts:
             if (
                 isinstance(part, ToolCallPart)
+                and part.tool_name not in output_tools
                 and part.tool_call_id not in self.blocked
                 and check_tool(self.role, part.tool_name, self.scope.ws.events, self.scope.loop_id)
             ):
@@ -109,7 +140,8 @@ class _Harness(AbstractCapability):
             output_tokens = usage.output_tokens if usage else 0
             searches = self._record_hosted(response) if response is not None else 0
             if response is not None:
-                self._block_disallowed(response)
+                params = request_context.model_request_parameters
+                self._block_disallowed(response, {t.name for t in params.output_tools})
             cost = estimate_cost(model_name, input_tokens, output_tokens, searches)
             self.scope.ws.events.append(
                 "model.call",
@@ -164,7 +196,7 @@ async def run_role[T: BaseModel](
     output_type: type[T],
     pack: ContextPack,
     scope: Scope,
-    model: Model,
+    model: Model | RoleRouter,
     tools: list = (),
     attachments: list[BinaryContent] = (),
     capabilities: list[AbstractCapability] = (),
@@ -181,7 +213,7 @@ async def run_role_full[T: BaseModel](
     output_type: type[T],
     pack: ContextPack,
     scope: Scope,
-    model: Model,
+    model: Model | RoleRouter,
     tools: list = (),
     attachments: list[BinaryContent] = (),
     capabilities: list[AbstractCapability] = (),
@@ -189,12 +221,13 @@ async def run_role_full[T: BaseModel](
     """Like run_role, plus hosted search counts and citations. `attachments` are images the
     model sees with the prompt (the Reviewer's vision check). `capabilities` add hosted tools;
     callers check the allowlist before adding one."""
+    model = resolve(model, role)
     harness = _Harness(role, scope, pack)
     agent = Agent(
         model,
         name=role,
         instructions=pack.instructions,
-        output_type=NativeOutput(output_type, strict=True),
+        output_type=_output_spec(model, output_type, tools),
         tools=list(tools),
         capabilities=[harness, *capabilities],
         model_settings={"tool_choice": "auto", "openai_store": False},
