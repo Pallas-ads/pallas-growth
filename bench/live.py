@@ -165,14 +165,22 @@ def _change_text(change: dict) -> str:
 
 
 async def run_live(
-    arms: list[str], scenarios: list[Scenario], seeds: list[int], api_key: str, spend: Spend
+    arms: list[str],
+    scenarios: list[Scenario],
+    seeds: list[int],
+    api_key: str,
+    spend: Spend,
+    done: set[str] = frozenset(),
 ) -> tuple[list[Grade], list[str]]:
+    """Run each arm, scenario and seed once, skipping the runs named in `done`."""
     grades, skipped = [], []
     with tempfile.TemporaryDirectory() as tmp:
         for scenario in scenarios:
             for seed in seeds:
                 for arm in arms:
                     name = f"{arm} {scenario.key} seed {seed}"
+                    if name in done:
+                        continue
                     if spend.spent >= spend.cap:
                         skipped.append(name)
                         continue
@@ -298,6 +306,24 @@ def _cap_stopped(g: Grade) -> bool:
     return "SpendCapReached" in g.stage or "SpendCapReached" in g.why
 
 
+def _run_name(g: Grade) -> str:
+    return f"{g.arm} {g.scenario} seed {g.seed}"
+
+
+def append(saved: dict, grades: list[Grade], skipped: list[str], spend: Spend) -> dict:
+    """Add a new live run to saved results: its grades join the old ones, the runs it made
+    leave the old skipped list, and its cap and spend add to the totals."""
+    ran = {_run_name(g) for g in grades}
+    old_skipped = [n for n in saved.get("skipped", []) if n.split(" (")[0] not in ran]
+    return {
+        **saved,
+        "cap": round(saved["cap"] + spend.cap, 6),
+        "spent": round(saved["spent"] + spend.spent, 6),
+        "skipped": [n for n in old_skipped if n not in skipped] + skipped,
+        "grades": saved["grades"] + [g.as_dict() for g in grades],
+    }
+
+
 def regrade(saved: dict) -> tuple[list[Grade], list[str]]:
     """Apply the current pass rules to saved live runs, without calling the API again.
     Returns the grades and the runs the spend cap stopped."""
@@ -326,6 +352,9 @@ def main() -> None:
     parser.add_argument(
         "--regrade", action="store_true", help="re-grade --out and rewrite --doc; no API calls"
     )
+    parser.add_argument(
+        "--append", action="store_true", help="add to --out, skipping runs it already graded"
+    )
     args = parser.parse_args()
     if args.regrade:
         saved = json.loads(args.out.read_text())
@@ -348,7 +377,9 @@ def main() -> None:
         parser.error("MODEL_API_KEY is required for an approved live run")
     spend = Spend(cap=args.cap)
     scenarios = [BY_KEY[k] for k in args.scenarios]
-    grades, skipped = asyncio.run(run_live(args.arms, scenarios, args.seeds, api_key, spend))
+    old = json.loads(args.out.read_text()) if args.append else None
+    done = {_run_name(Grade(**d)) for d in old["grades"]} if old else set()
+    grades, skipped = asyncio.run(run_live(args.arms, scenarios, args.seeds, api_key, spend, done))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     saved = {
         "cap": spend.cap,
@@ -356,8 +387,12 @@ def main() -> None:
         "skipped": skipped,
         "grades": [g.as_dict() for g in grades],
     }
+    if old:
+        saved = append(old, grades, skipped, spend)
+        grades, spend = [Grade(**d) for d in saved["grades"]], Spend(saved["cap"], saved["spent"])
+        skipped = saved["skipped"]
     args.out.write_text(json.dumps(saved, indent=2) + "\n")
-    report = markdown(grades, skipped, spend)
+    report = markdown(grades, skipped, spend, saved.get("notes"))
     args.doc.write_text(report)
     print(report)
 

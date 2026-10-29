@@ -5,8 +5,9 @@ import asyncio
 import httpx
 import pytest
 
-from bench.grader import Grade, verdict
-from bench.live import LiveMeta, Spend, regrade
+from bench.grader import Grade, shipped_copies, verdict
+from bench.live import LiveMeta, Spend, append, regrade
+from bench.world import ScriptedUser, WeekResult
 
 REPLY = {
     "id": "resp_1",
@@ -90,3 +91,36 @@ def test_regrade_applies_current_rules_and_keeps_stopped_runs_failed():
     assert (a.passed, a.why) == (True, "")
     assert not b.passed and b.why.startswith("stopped:")
     assert not c.passed and c.why.endswith("(SAM found no box)")
+
+
+def test_append_adds_new_runs_and_clears_them_from_skipped():
+    old = _grade()
+    saved = {
+        "cap": 3.9,
+        "spent": 3.97,
+        "skipped": ["agents-sdk s1 seed 7 (stopped mid-run)", "pgt s1 seed 11", "pgt s1 seed 1"],
+        "grades": [old.as_dict()],
+        "notes": ["kept"],
+    }
+    new = _grade(arm="agents-sdk", scenario="s1", stage="applied")
+    later = _grade(scenario="s1", seed=11, stage="applied")
+    merged = append(saved, [new, later], ["single-agent s1 seed 23"], Spend(3.0, 2.5))
+    assert merged["cap"] == pytest.approx(6.9) and merged["spent"] == pytest.approx(6.47)
+    assert merged["skipped"] == ["pgt s1 seed 1", "single-agent s1 seed 23"]
+    assert [g["arm"] for g in merged["grades"]] == ["pgt", "agents-sdk", "pgt"]
+    assert merged["notes"] == ["kept"]
+
+
+def test_an_ad_with_its_own_name_ships_the_test_its_approved_draft_names():
+    # A live model may name ads freely; the approved draft still says which test each is.
+    copy = object()
+    user = ScriptedUser()
+    draft = {"test_id": "w1-t2", "campaign_id": "cmp_1", "name": "Test 2 - Ease"}
+    user("change_set", {"ad_drafts": [draft], "changes": []})
+    writes = [
+        {"kind": "ad_created", "campaign_id": "cmp_1", "name": "Test 2 - Ease"},
+        {"kind": "ad_created", "campaign_id": "cmp_1", "name": "w1-t1 Streak"},
+        {"kind": "ad_created", "campaign_id": "cmp_1", "name": "Unknown ad"},
+    ]
+    result = WeekResult(stage="applied", creatives={"w1-t1": copy, "w1-t2": copy})
+    assert set(shipped_copies(writes, result, user)) == {"w1-t1", "w1-t2"}
