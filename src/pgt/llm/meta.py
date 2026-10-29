@@ -13,7 +13,12 @@ META_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_MODEL = "muse-spark-1.3"
 
 # USD per 1M tokens (input, output). Contributor models are cheaper; list price is an upper bound.
-PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (1.25, 4.25)}
+PRICES = {
+    "muse-spark-1.3": (1.25, 4.25),
+    "muse-wonder-1.0": (1.25, 4.25),
+    # Baseten bills reasoning tokens as output; they are already inside completion_tokens.
+    "meta-models/muse-spark-open-1026": (1.25, 4.25),
+}
 SEARCH_PRICE = 2.50 / 1000
 IMAGE_MODEL = "muse-image-1.0"
 SAM_MODEL = "sam-3.1"

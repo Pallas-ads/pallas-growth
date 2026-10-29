@@ -1,7 +1,10 @@
 """Command-line entry points:
 
-pgt simulate --days 7 [--live] [--db path]
-pgt weekly [--yes] [--live] [--db path] [--out runs/media]
+pgt simulate --days 7 [--live] [--provider meta|mixed] [--db path]
+pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/media]
+
+--provider mixed runs the text roles on Muse Spark (open weights) on Baseten and keeps the
+Creative Strategist (hosted web search) and image work on the Meta API.
 """
 
 from __future__ import annotations
@@ -24,6 +27,13 @@ def main(argv: list[str] | None = None) -> None:
     sim.add_argument("--db", default=":memory:", help="SQLite file for the workspace")
     sim.add_argument("--live", action="store_true", help="Call Muse (costs money; needs a key)")
     sim.add_argument("--model", default="muse-spark-1.3")
+    sim.add_argument("--provider", choices=["meta", "mixed"], default="meta")
+    sim.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh"],
+        default="medium",
+        help="Reasoning effort on Baseten (--provider mixed)",
+    )
     sim.add_argument("--plant-injection", action="store_true")
     week = sub.add_parser("weekly", help="Simulate a week, then run the weekly review")
     week.add_argument("--seed", type=int, default=7)
@@ -31,13 +41,20 @@ def main(argv: list[str] | None = None) -> None:
     week.add_argument("--out", default="runs/media", help="Folder for creative images")
     week.add_argument("--live", action="store_true", help="Call Muse (costs money; needs a key)")
     week.add_argument("--model", default="muse-spark-1.3")
+    week.add_argument("--provider", choices=["meta", "mixed"], default="meta")
+    week.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh"],
+        default="medium",
+        help="Reasoning effort on Baseten (--provider mixed)",
+    )
     week.add_argument("--yes", action="store_true", help="Approve both steps without asking")
     args = parser.parse_args(argv)
     asyncio.run(_simulate(args) if args.command == "simulate" else _weekly(args))
 
 
 def _models(args):
-    """Returns (text model, AsyncOpenAI client for images, fake or None)."""
+    """Returns (text model or per-role router, AsyncOpenAI client for images, fake or None)."""
     from pgt.llm.meta import meta_client, responses_model
     from pgt.llm.offline import offline_model
 
@@ -46,8 +63,16 @@ def _models(args):
 
         load_dotenv()
         client = meta_client()
-        print(f"Live run on {args.model}.")
-        return responses_model(client, args.model), client, None
+        model = responses_model(client, args.model)
+        if args.provider == "mixed":
+            from pgt.llm.baseten import BASETEN_MODEL, baseten_client, chat_model
+            from pgt.llm.routing import mixed
+
+            model = mixed(model, chat_model(baseten_client(), effort=args.effort))
+            print(f"Live run: text roles on {BASETEN_MODEL} (Baseten), web search on {args.model}.")
+        else:
+            print(f"Live run on {args.model}.")
+        return model, client, None
     model, fake = offline_model(args.model)
     print("Offline run: a rule-based stand-in answers instead of Muse (no cost).")
     return model, fake.client(), fake
@@ -134,20 +159,9 @@ def _totals(ws, fake, loop_id: str) -> None:
 
 
 async def _simulate(args) -> None:
-    from pgt.llm.meta import meta_client, responses_model
-    from pgt.llm.offline import offline_model
     from pgt.loops.simulate import simulate
 
-    fake = None
-    if args.live:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-        model = responses_model(meta_client(), args.model)
-        print(f"Live run on {args.model}.")
-    else:
-        model, fake = offline_model(args.model)
-        print("Offline run: a rule-based stand-in answers instead of Muse (no cost).")
+    model, _, fake = _models(args)
 
     ws = Workspace(args.db)
     try:

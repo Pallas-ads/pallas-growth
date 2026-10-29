@@ -8,7 +8,9 @@ from pgt.llm.runtime import Scope
 
 
 def evidence_tool(scope: Scope) -> Tool:
-    def get_evidence(evidence_id: str) -> dict:
+    # Async so parallel calls run one at a time on the event loop: a sync tool would run in a
+    # worker thread, and two at once would share the workspace's SQLite connection.
+    async def get_evidence(evidence_id: str) -> dict:
         """Look up one evidence entry by ID: its numbers, inputs and note."""
         evidence = scope.ws.ledger.get(evidence_id)
         if evidence is None:
