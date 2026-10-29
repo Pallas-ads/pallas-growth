@@ -20,7 +20,7 @@ from pathlib import Path
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
-from bench.arms import pgt, single_agent
+from bench.arms import agents_sdk, pgt, single_agent
 from bench.grader import Grade, grade
 from bench.responder import bench_responder
 from bench.scenarios import BY_KEY, SCENARIOS, Scenario
@@ -29,7 +29,8 @@ from pgt.llm.offline import offline_model
 
 Arm = Callable[..., Awaitable[WeekResult]]
 ARMS: dict[str, Arm] = {name: pgt.run for name in pgt.ABLATIONS} | {
-    "single-agent": single_agent.run
+    "single-agent": single_agent.run,
+    "agents-sdk": agents_sdk.run,
 }
 SEEDS = [7, 11, 23]
 ROOT = Path(__file__).resolve().parent.parent
