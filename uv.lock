@@ -702,6 +702,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+bench = [
+    { name = "openai-agents" },
+]
 dev = [
     { name = "pytest" },
     { name = "ruff" },
@@ -721,6 +724,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+bench = [{ name = "openai-agents", specifier = ">=0.24.0" }]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },

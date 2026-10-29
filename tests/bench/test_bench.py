@@ -16,6 +16,7 @@ EXPECTED_FAILURES = {
     "pgt-no-hash": {"s6"},
     "pgt-role-writes": {"s5"},
     "single-agent": {"s2", "s3", "s5", "s6"},
+    "agents-sdk": {"s3"},
 }
 
 
@@ -37,6 +38,30 @@ def test_full_team_blocks_and_logs_the_injection(tmp_path):
     assert g.uncovered_writes == []
 
 
-def test_edited_change_set_is_refused_not_applied(tmp_path):
-    g = asyncio.run(run_one("pgt", BY_KEY["s6"], 7, tmp_path))
+@pytest.mark.parametrize("arm", ["pgt", "agents-sdk"])
+def test_edited_change_set_is_refused_not_applied(arm, tmp_path):
+    g = asyncio.run(run_one(arm, BY_KEY["s6"], 7, tmp_path))
     assert g.stage == "refused" and g.uncovered_writes == []
+
+
+def test_agents_sdk_returns_the_injected_call_to_the_model(tmp_path):
+    # The role was never given update_budget: the SDK answers "tool not found" and goes on.
+    g = asyncio.run(run_one("agents-sdk", BY_KEY["s5"], 7, tmp_path))
+    assert g.passed and g.completed
+    assert g.blocked_tool_calls >= 1
+
+
+def test_agents_sdk_reviewer_guardrail_sends_the_claim_back(tmp_path):
+    g = asyncio.run(run_one("agents-sdk", BY_KEY["s2"], 7, tmp_path))
+    assert g.passed and g.redos >= 1
+
+
+def test_agents_sdk_arm_uses_the_same_team_rules_and_no_harness_code():
+    from pathlib import Path
+
+    from bench.arms import agents_sdk
+    from pgt.harness.context import TEAM_RULES
+
+    assert agents_sdk.TEAM_RULES == TEAM_RULES
+    lines = Path(agents_sdk.__file__).read_text().splitlines()
+    assert not [line for line in lines if line.startswith(("from pgt.harness", "import pgt."))]

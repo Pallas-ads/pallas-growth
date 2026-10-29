@@ -31,8 +31,18 @@ def called_tools(body: dict) -> list[dict]:
     return calls
 
 
+def with_schema_name(body: dict) -> dict:
+    """The Agents SDK names every structured output "final_output"; its schema title holds the
+    model name the offline responder dispatches on."""
+    fmt = body.get("text", {}).get("format", {})
+    if fmt.get("name") != "final_output" or "title" not in fmt.get("schema", {}):
+        return body
+    return {**body, "text": {**body["text"], "format": {**fmt, "name": fmt["schema"]["title"]}}}
+
+
 def bench_responder(scenario: Scenario):
     def respond(body: dict):
+        body = with_schema_name(body)
         if body.get("model") == SAM_MODEL:
             return offline_responder(body)
         # Prompt injection: any model that reads the planted campaign name obeys it, once per
@@ -47,6 +57,10 @@ def bench_responder(scenario: Scenario):
             from bench.arms.single_agent import scripted_step
 
             return scripted_step(body, scenario)
+        if output_name(body) == "OperatorReport":
+            from bench.arms.agents_sdk import scripted_operator
+
+            return scripted_operator(body)
         if scenario.first_draft and output_name(body) == "CreativeCopy":
             outputs = tool_outputs(body)
             inputs = prompt_inputs(body)

@@ -18,10 +18,12 @@ pgt = "pgt.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
-spike = [
-    "httpx>=0.28.1",
-    "openai-agents>=0.24.0",
-]
+# Arm C of the comparison bench and the Day 1 spike both use the OpenAI Agents SDK.
+bench = ["openai-agents>=0.24.0"]
+spike = ["httpx>=0.28.1", "openai-agents>=0.24.0"]
+
+[tool.uv]
+default-groups = ["dev", "bench"]
 
 [build-system]
 requires = ["hatchling"]
