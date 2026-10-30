@@ -211,8 +211,11 @@ def test_first_run_connects_the_sandbox_with_a_level_and_rules(client):
     assert a["connection"]["account_id"] == "act_sandbox_0001"
     assert a["level"] == 1 and a["rules"]["daily_budget_cap"] == 80
     assert a["rules"]["preset"] == "custom" and a["fact_version"] == 2
-    texts = [i["text"] for i in client.get("/api/room").json()["items"] if i["kind"] == "msg"]
-    assert any(t.startswith("Set the team to L1 Propose") for t in texts)
+    items = client.get("/api/room").json()["items"]
+    texts = [i["text"] for i in items if i["kind"] == "msg"]
+    lines = [i["label"] for i in items if i["kind"] == "day"]
+    assert lines[-1].startswith("Connected Pallas Fit sandbox (act_sandbox_0001)") and lines[-1].endswith("L1 Propose")
+    assert not any(t.startswith("Set the team to") for t in texts)  # said in the line above
     assert any(t.startswith("Changed house rules (daily budget cap from $") and "to $80)" in t
                for t in texts)
     # A real account cannot be connected without the Meta login.
@@ -286,7 +289,7 @@ def test_budget_change_resplits_the_plan_and_says_what_reran(client):
 
 
 def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
-    from tests.unit.test_ads_mcp import FakeMcp
+    from tests.unit.test_ads_mcp import DRAFT_SCHEMA, FakeMcp
     from tests.unit.test_meta_account import TOKEN, FakeGraph
 
     _idle(client)
@@ -294,15 +297,30 @@ def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
     sandbox_ws, sandbox_day = team.ws, team.account.day
     graph = FakeGraph()
     client.app.state.graph_transport = graph
-    client.app.state.mcp_transport = FakeMcp(graph)
+    client.app.state.mcp_transport = FakeMcp(graph, schema=DRAFT_SCHEMA)
     team.meta = {"token": TOKEN, "accounts": [{"kind": "meta", "account_id": "act_42",
                                                "name": "Test", "currency": "USD"}]}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("pgt.ads.meta_login.unavailable", lambda public: None)
         mp.setenv("META_ADSET_IDS", "111")
         r = client.post("/api/access/connect",
-                        json={"kind": "meta", "account_id": "act_42", "level": 2})
-    assert r.status_code == 200, r.text
+                        json={"kind": "meta", "account_id": "act_42", "level": 2,
+                              "rules": {"daily_budget_cap": 100}})
+        assert r.status_code == 200, r.text
+        _idle(client)
+    # A cold start: one line for the connect, then the Growth Lead says what it read.
+    room = client.get("/api/room").json()["items"]
+    assert [i["kind"] for i in room] == ["day", "msg"]
+    assert room[0]["label"] == ("Connected Test (act_42) · real account · "
+                                "L2 Apply after approval")
+    kick = room[1]
+    assert kick["who"]["actor"] == "growth_lead"
+    assert "Live in the scope you set: 1 ad set with 2 ads, $210.50 spent so far." in kick["text"]
+    assert "2 campaigns, 1 ad set and 2 ads (Spring launch, Retargeting)" in kick["text"]
+    assert team.ws.facts.version == 1  # the setup rules are the first facts, not a change
+    assert team.ws.facts.current().house_rules.daily_budget_cap == 100
+    d = client.get("/api/drafts").json()
+    assert d["available"] and d["counts"] == {"campaign": 2, "ad set": 1, "ad": 2}
     assert team.real and team.ws is not sandbox_ws
     assert (tmp_path / "meta-act_42.db").exists()
     a = client.get("/api/access").json()

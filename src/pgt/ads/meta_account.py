@@ -26,7 +26,7 @@ from pathlib import Path
 
 from pgt.schemas.ads import AccountState, AdState, CampaignState, InsightRow, Status
 
-from .ads_mcp import ENTITIES_TOOL, McpError, McpReads, McpUnsupported
+from .ads_mcp import ENTITIES_TOOL, McpError, McpReads, McpUnsupported, draft_node
 from .graph import Graph, GraphError
 
 # Currencies Meta bills without minor units; every other currency uses cents.
@@ -76,6 +76,7 @@ class MetaAccount:
         self._on_write = on_write  # called with each write PGT made, so the workspace keeps it
         self._state: AccountState | None = None
         self._rows: dict[int, list[InsightRow]] = {}
+        self._drafts: list[dict] | None = None
         self._currency: str | None = currency or None
         # Reads through the Ads MCP; None reads everything through the Graph API.
         self._mcp = None if mcp is None else McpReads(mcp, self.account_id, self.result_action)
@@ -112,6 +113,7 @@ class MetaAccount:
         """Drop what was read, so the next call reads the account again."""
         self._state = None
         self._rows = {}
+        self._drafts = None
 
     def advance_day(self) -> list[InsightRow]:
         """A real account moves with the calendar; this reads the newest complete day."""
@@ -149,6 +151,23 @@ class MetaAccount:
         tools = self._mcp.tools()
         entities = tools.get(ENTITIES_TOOL) or {}
         return {"tools": sorted(tools), ENTITIES_TOOL: entities.get("inputSchema")}
+
+    def drafts(self) -> list[dict]:
+        """Unpublished changes staged in Ads Manager, read through the Ads MCP only. Read-only:
+        PGT never publishes or edits a draft. Raises McpError when the MCP cannot read them."""
+        if self._drafts is None:
+            if self._mcp is None:
+                raise McpUnsupported("Drafts are read through the Meta Ads MCP, which is off")
+            try:
+                rows = self._mcp.drafts()
+            except McpError as exc:
+                self._sources["drafts"] = "none"
+                self._mcp_notes["drafts"] = str(exc)
+                raise
+            self._sources["drafts"] = "mcp"
+            self._mcp_notes.pop("drafts", None)
+            self._drafts = [draft_node(r) for r in rows]
+        return deepcopy(self._drafts)
 
     @property
     def _offset(self) -> int:

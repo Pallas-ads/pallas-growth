@@ -1,7 +1,7 @@
 // 5a Dashboard: the sandbox account's numbers, read from the same Insights-shaped rows the
 // Analyst reads, with the team's actions pinned to the days they happened.
 import { Fragment, useState, type ReactNode } from "react";
-import { api, clock, useData, type Action, type DashboardData, type Kpi, type Metrics } from "./api";
+import { api, clock, useData, type Action, type DashboardData, type DraftNode, type Kpi, type Metrics } from "./api";
 import { go, type Route } from "./route";
 
 type Ready = Extract<DashboardData, { ready: true }>;
@@ -186,19 +186,60 @@ function Actions({ d }: { d: Ready }) {
   );
 }
 
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+function DraftRow({ n, depth }: { n: DraftNode; depth: number }) {
+  const details = Object.entries(n.details).slice(0, 4);
+  return (
+    <>
+      <div className="draft" style={{ paddingLeft: depth * 18 }}>
+        <span className="lvl">{n.level}</span>
+        <span className="nm">{n.name || <span className="muted">Untitled</span>}
+          {n.id && <span className="mono muted" style={{ fontSize: 10.5 }}> {n.id}</span>}</span>
+        {n.status && <span className="lbl">{n.status.toLowerCase()}</span>}
+        <span className="mono muted dt">
+          {details.map(([k, v]) => `${k.replace(/_/g, " ")} ${String(v)}`).join(" · ")}
+          {n.nested.length > 0 && `${details.length ? " · " : ""}${n.nested.map((k) => k.replace(/_/g, " ")).join(", ")} set`}
+        </span>
+      </div>
+      {n.children.map((c, i) => <DraftRow key={`${c.id}-${i}`} n={c} depth={depth + 1} />)}
+    </>
+  );
+}
+
+/** Unpublished drafts staged in Ads Manager, as the Ads MCP returned them. PGT never edits them. */
+function Drafts({ tick }: { tick: number }) {
+  const { data, error } = useData(() => api.drafts(), [tick]);
+  const c = data?.counts;
+  return (
+    <div className="card" style={{ padding: "12px 14px 8px" }}>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+        <span className="h3">Drafts in Ads Manager</span>
+        <span className="mono muted" style={{ fontSize: 10.5 }}>
+          {c ? `${plural(c["campaign"] ?? 0, "campaign")} · ${plural(c["ad set"] ?? 0, "ad set")} · ${plural(c["ad"] ?? 0, "ad")} · ` : ""}
+          read only, not published</span>
+      </div>
+      {error && <div className="err" style={{ fontSize: 12 }}>{error}</div>}
+      {data && !data.available && <div className="muted" style={{ fontSize: 12, padding: "4px 0" }}>Drafts could not be read: {data.reason}</div>}
+      {data?.available && data.drafts.length === 0 && <div className="muted" style={{ fontSize: 12, padding: "4px 0" }}>No drafts are waiting in Ads Manager.</div>}
+      {data?.drafts.map((d, i) => <DraftRow key={`${d.id}-${i}`} n={d} depth={0} />)}
+    </div>
+  );
+}
+
 export default function Dashboard({ tick, route, sidebar }: { tick: number; route: Route; sidebar: ReactNode }) {
   const days = [7, 14, 28].includes(Number(route.q.get("days"))) ? Number(route.q.get("days")) : 7;
   const { data, error } = useData(() => api.dashboard(days), [tick, days]);
   const [tip, setTip] = useState<string | null>(null);
   const [how, setHow] = useState(false);
-  const d = data && data.ready ? data : null;
+  const d = data && data.ready && !(data.real && data.campaigns.length === 0) ? data : null;
   return (
     <div className="app list">
       {sidebar}
       <main className="col scroll top" style={{ padding: "16px 26px 18px", gap: 10, minWidth: 0 }}>
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <div className="eyebrow">Pallas Fit sandbox{d ? ` · days ${d.start} to ${d.end}` : ""}</div>
+            <div className="eyebrow">{data?.account_name ?? "Pallas Fit sandbox"}{d ? ` · days ${d.start} to ${d.end}` : ""}</div>
             <div className="h1" style={{ marginTop: 4 }}>Dashboard</div>
           </div>
           <div className="row" style={{ gap: 10 }}>
@@ -210,6 +251,12 @@ export default function Dashboard({ tick, route, sidebar }: { tick: number; rout
             </div>
           </div>
         </div>
+        {data?.real ? (
+          <div className="synth">
+            <span className="k">Real account</span>
+            <span><span className="mono ink">{data.account}</span> · read through Meta's Ads MCP · stays on this computer</span>
+          </div>
+        ) : (
         <div className="synth">
           <span className="k">Synthetic</span>
           <span>Sandbox account <span className="mono ink">{data?.account ?? "act_sandbox_0001"}</span> · Marketing API Insights shape · no real money or people</span>
@@ -225,8 +272,11 @@ export default function Dashboard({ tick, route, sidebar }: { tick: number; rout
             </div>
           )}
         </div>
+        )}
         {error && <div className="err" style={{ fontSize: 12 }}>{error}</div>}
-        {data && !data.ready && <div className="empty">The team is setting up the demo week.</div>}
+        {data?.real && <Drafts tick={tick} />}
+        {data?.real && !d && <div className="empty">Nothing is live on this account, so there are no numbers yet. Daily numbers appear once an ad set runs.</div>}
+        {data && !data.ready && !data.real && <div className="empty">The team is setting up the demo week.</div>}
         {d && (
           <>
             {d.short && <div className="muted" style={{ fontSize: 12 }}>
