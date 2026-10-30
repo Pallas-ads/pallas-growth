@@ -39,7 +39,7 @@ TYPES = {
 
 HIDDEN = {
     "model.call", "model.cost", "tool.call", "context.assembled", "evidence.added",
-    "loop.finished", "loop.stage", "artifact.status", "fact.changed", "approval.simulated",
+    "loop.finished", "loop.stage", "artifact.status", "approval.simulated",
     "approval.voided", "media.call",
 }
 
@@ -266,6 +266,11 @@ def _fold_line(ws: Workspace, e: Event) -> tuple[str, str] | None:
                           + ", ".join(r.replace("_", " ") for r in p["rules"]))
     if e.type in ("stage.refused", "question.refused"):
         return e.actor, p.get("reason") or p.get("question") or e.type
+    if e.type == "artifact.kept":
+        return e.actor, f"Kept {p['key']}: {p['reason']}"
+    if e.type == "creative.reused":
+        return e.actor, (f"Reused {p['creative_id']} for {p['test_id']}: it passed review and "
+                         "nothing it uses has changed.")
     if e.type == "fact.proposed":
         return e.actor, f"Proposed a change to {p.get('key')}: {p.get('reason', '')}"
     if e.type == "artifact.published":
@@ -301,6 +306,8 @@ def _fold(lines: list[dict], loop_id: str | None) -> dict:
         tail = f"prepared the Day {loop_id[7:]} check"
     elif loop_id and loop_id.startswith("weekly-w"):
         tail = f"worked on the Week {loop_id[8:]} review"
+    elif loop_id and loop_id.startswith("refresh-"):
+        tail = "re-checked the work built on the old values"
     elif lines and all(line["type"] == "task.handoff" for line in lines):
         tail = "handed out the work"
     elif lines and all(line["type"].startswith("question.") for line in lines):
@@ -311,6 +318,64 @@ def _fold(lines: list[dict], loop_id: str | None) -> dict:
             "actors": [role(a) for a in actors], "names": names, "tail": tail,
             "ts_from": lines[0]["ts"], "ts_to": lines[-1]["ts"], "sim_day": lines[0]["sim_day"],
             "items": lines}
+
+
+SETTING_EVENTS = {"access.level", "account.connected", "account.disconnected",
+                  "changeset.handed_off", "fact.changed", "refresh.done"}
+LEVEL_TEXT = {
+    0: "The team reads and reports, and asks me for nothing.",
+    1: "Approved changes come back to me to apply in Ads Manager.",
+    2: "The Operator applies what I approve. New ads still start paused.",
+}
+
+
+def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict | None] | None:
+    """(actor, text, card) for a change the owner made in Settings, or None to hide it."""
+    from pgt.harness import access
+
+    p = e.payload
+    if e.type == "access.level":
+        return e.actor, f"Set the team to {access.describe(p['level'])}. {LEVEL_TEXT[p['level']]}", None
+    if e.type == "account.connected":
+        what = "Sandbox, synthetic data." if p.get("kind") == "sandbox" else "Read-only."
+        return e.actor, f"Connected {p.get('name')} ({p.get('account_id')}). {what}", None
+    if e.type == "account.disconnected":
+        return e.actor, "Disconnected the ad account.", None
+    if e.type == "changeset.handed_off":
+        record = ws.artifacts.get(e.refs[0]) if e.refs else None
+        parts = [_plural(p.get("changes", 0), "approved change")]
+        if p.get("ads"):
+            parts.append(_plural(p["ads"], "new ad"))
+        text = (f"Nothing written: the team is at L1 Propose. Apply {' and '.join(parts)} "
+                "yourself in Ads Manager.")
+        return "operator", text, _card(ws, idx, record, names) if record else None
+    if e.type == "fact.changed" and p.get("version", 1) > 1:
+        before, after = ws.facts.get(p["version"] - 1), ws.facts.get(p["version"])
+        parts = [_fact_change(k, getattr(before, k), getattr(after, k))
+                 for k in p.get("changed", [])]
+        return e.actor, (f"Changed {'; '.join(parts)}. Work built on the old values is marked "
+                         "stale until the team re-checks it."), None
+    if e.type == "refresh.done":
+        return "growth_lead", " ".join(p.get("lines", [])), None
+    return None
+
+
+def _fact_change(key: str, old, new) -> str:
+    """'weekly budget from $385 to $280'; house rules name each rule that moved."""
+    label = key.replace("_", " ")
+    if key == "house_rules":
+        a, b = old.model_dump(exclude={"preset"}), new.model_dump(exclude={"preset"})
+        moved = [_fact_change(k, a[k], b[k]) for k in b if a[k] != b[k]]
+        return f"house rules ({', '.join(moved)})" if moved else "house rules"
+    if isinstance(new, bool):
+        return f"{label} {'on' if new else 'off'}"
+    if not isinstance(new, int | float):
+        return label
+    if key.endswith(("_share", "_pct")):
+        return f"{label} from {old:.0%} to {new:.0%}"
+    if key.endswith(("budget", "_cap")) or key.startswith("target_cost"):
+        return f"{label} from ${old:,.2f} to ${new:,.2f}".replace(".00", "")
+    return f"{label} from {old:g} to {new:g}"
 
 
 def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
@@ -326,7 +391,7 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
     def flush():
         nonlocal fold
         if fold:
-            items.append(_fold(fold, fold_loop))
+            items.append(_fold(fold, fold[0]["loop"] or fold_loop))
             fold = []
 
     def add(item: dict):
@@ -395,7 +460,10 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
                 reply(roots.get(p["key"]), e, "user", f"Approved {name}.")
             continue
         if e.type == "approval.returned":
-            reply(roots.get(p["key"]), e, "user", f"Sent back: {p.get('note', '')}".strip())
+            text = f"Sent back: {p.get('note', '')}".strip()
+            if p.get("redo") is False:
+                text += " (This day has passed, so nothing is redone. The next check starts fresh.)"
+            reply(roots.get(p["key"]), e, "user", text)
             continue
         if e.type == "changeset.applied":
             record = ws.artifacts.get(e.refs[0]) if e.refs else None
@@ -423,12 +491,18 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
             else:
                 add(_msg(e, e.actor, text))
             continue
+        if e.type in SETTING_EVENTS:
+            said = _setting(ws, idx, e, names)
+            if said is not None:
+                add(_msg(e, said[0], said[1], card=said[2]))
+            continue
         line = _fold_line(ws, e)
         if line is None:
             continue
-        if fold and fold_loop != e.loop_id and e.loop_id is not None:
+        if fold and (fold[-1]["loop"] or fold_loop) != e.loop_id and e.loop_id is not None:
             flush()
         fold.append({"id": e.id, "ts": e.ts, "sim_day": e.sim_day, "type": e.type,
+                     "loop": e.loop_id,
                      "who": role(line[0]), "text": line[1]})
     flush()
     for it in items:

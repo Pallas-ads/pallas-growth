@@ -1,7 +1,9 @@
-// Settings: the business facts the team works from, what the models cost, and the controls
-// that move the simulated week forward.
+// Settings: the Meta connection and how much the team may do, the house rules, the business facts
+// the team works from, what the models cost, and the controls that move the simulated week forward.
 import { Fragment, useState, type ReactNode } from "react";
-import { api, money, useData, type SettingsData } from "./api";
+import { Connection, FactsForm, HouseRulesForm } from "./Access";
+import { api, money, useData, type AccessData, type SettingsData } from "./api";
+import type { Route } from "./route";
 import { Av } from "./ui";
 
 function rows(obj: Record<string, unknown>): [string, string][] {
@@ -15,43 +17,81 @@ function rows(obj: Record<string, unknown>): [string, string][] {
   });
 }
 
-export default function Settings({ tick, busy, sidebar }: { tick: number; busy: string | null; sidebar: ReactNode }) {
+// Edited in the form above the list.
+const NUMBERS = new Set(["weekly budget", "test budget share", "target cost per result"]);
+
+const SECTIONS = [
+  { key: "connection", label: "Meta connection" },
+  { key: "rules", label: "House rules" },
+  { key: "facts", label: "Business facts" },
+  { key: "models", label: "Models and spend" },
+  { key: "simulation", label: "Simulation" },
+] as const;
+
+export default function Settings({ tick, busy, sidebar, route, access, onAccess }: {
+  tick: number; busy: string | null; sidebar: ReactNode; route: Route;
+  access: AccessData | null; onAccess: () => void;
+}) {
   const { data } = useData(api.settings, [tick]);
   const [error, setError] = useState<string | null>(null);
   const run = (fn: () => Promise<unknown>) => { setError(null); fn().catch((e: Error) => setError(e.message)); };
+  const s = route.q.get("s") ?? "connection";
+  const meta = route.q.get("meta");
+  const where = access?.connection?.name ?? "No account connected";
   return (
     <div className="app list">
       {sidebar}
-      <main className="col scroll top" style={{ padding: "18px 28px", gap: 22, minWidth: 0 }}>
+      <main className="col scroll top" style={{ padding: "18px 28px", gap: 16, minWidth: 0 }}>
         <div>
-          <div className="eyebrow">Pallas Fit sandbox{data?.day ? ` · day ${data.day}` : ""}</div>
+          <div className="eyebrow">{where}{data?.day ? ` · day ${data.day}` : ""}</div>
           <div className="h1" style={{ marginTop: 4 }}>Settings</div>
         </div>
-        <section className="section" style={{ maxWidth: 640 }}>
-          <div className="h2">Simulation</div>
-          <div className="muted" style={{ fontSize: 12.5 }}>
-            The account is a synthetic sandbox. {data?.offline
-              ? "Each step runs the team on an offline stand-in that answers in the same shape as Muse, at no cost."
-              : `Each step calls the real models and is charged at list price, up to the $${data?.cap ?? ""} cap.`} Nothing reaches a real ad account.
+        {meta === "cancelled" && <div className="note">Facebook Login was cancelled. Nothing was connected.</div>}
+        {meta === "failed" && <div className="note err">Meta did not return an ad account. Nothing was connected; try again.</div>}
+        <div className="set-wrap">
+          <nav className="snav" aria-label="Settings">
+            {SECTIONS.map((x) => (
+              <a key={x.key} className={s === x.key ? "on" : ""} href={`#/settings?s=${x.key}`}>{x.label}</a>
+            ))}
+          </nav>
+          <div className="col grow" style={{ gap: 16, minWidth: 0, maxWidth: 860 }}>
+            {s === "connection" && access && <Connection a={access} onChange={onAccess} />}
+            {s === "rules" && access && (
+              <section className="section">
+                <div className="h2">House rules and budget caps</div>
+                <HouseRulesForm a={access} onChange={onAccess} />
+              </section>
+            )}
+            {s === "simulation" && (
+              <section className="section" style={{ maxWidth: 640 }}>
+                <div className="h2">Simulation</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>
+                  The account is a synthetic sandbox. {data?.offline
+                    ? "Each step runs the team on an offline stand-in that answers in the same shape as Muse, at no cost."
+                    : `Each step calls the real models and is charged at list price, up to the $${data?.cap ?? ""} cap.`} Nothing reaches a real ad account.
+                </div>
+                <div className="row" style={{ gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                  <button className="btn ink" disabled={!!busy} onClick={() => run(api.runDay)}>Run the next day</button>
+                  <button className="btn ghost" disabled={!!busy} onClick={() => run(api.runWeek)}>Start the weekly review</button>
+                  {busy && <span className="status-bar"><span className="dot work" />{busy}</span>}
+                  {error && <span className="err" style={{ fontSize: 12 }}>{error}</span>}
+                </div>
+              </section>
+            )}
+            {s === "models" && data && <Usage data={data} />}
+            {s === "facts" && data && (
+              <section className="section">
+                <div className="h2">Business facts · version {data.fact_version}</div>
+                <FactsForm facts={data.facts as unknown as Parameters<typeof FactsForm>[0]["facts"]}
+                           version={data.fact_version} onChange={onAccess} />
+                <dl className="kv facts">
+                  {rows(data.facts).filter(([k]) => !NUMBERS.has(k))
+                    .map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+                </dl>
+              </section>
+            )}
           </div>
-          <div className="row" style={{ gap: 8, marginTop: 4 }}>
-            <button className="btn ink" disabled={!!busy} onClick={() => run(api.runDay)}>Run the next day</button>
-            <button className="btn ghost" disabled={!!busy} onClick={() => run(api.runWeek)}>Start the weekly review</button>
-            {busy && <span className="status-bar"><span className="dot work" />{busy}</span>}
-            {error && <span className="err" style={{ fontSize: 12 }}>{error}</span>}
-          </div>
-        </section>
-        {data && (
-          <>
-            <Usage data={data} />
-            <section className="section" style={{ maxWidth: 820 }}>
-              <div className="h2">Business facts · version {data.fact_version}</div>
-              <dl className="kv facts">
-                {rows(data.facts).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
-              </dl>
-            </section>
-          </>
-        )}
+        </div>
       </main>
     </div>
   );
@@ -66,7 +106,7 @@ const MODE_TEXT = {
 function Usage({ data }: { data: SettingsData }) {
   const used = data.cap ? Math.min(data.cost / data.cap, 1) : 0;
   return (
-    <section className="section" style={{ maxWidth: 820 }}>
+    <section className="section">
       <div className="h2">Models and spend</div>
       <div className="muted" style={{ fontSize: 12.5 }}>{MODE_TEXT[data.mode]}</div>
       {data.cap != null && (

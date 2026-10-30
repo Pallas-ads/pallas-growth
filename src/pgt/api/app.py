@@ -8,19 +8,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from pgt.api import views
+from pgt.ads import meta_login
+from pgt.api import board, views
+from pgt.harness import access
 from pgt.harness.workspace import Workspace
 from pgt.schemas import ChangeSet
+from pgt.schemas.settings import PRESETS, HouseRules
 
 
 @dataclass
@@ -36,6 +41,8 @@ class Team:
     busy: str | None = None  # what the team is doing right now, if anything
     error: str | None = None
     tasks: set = field(default_factory=set)
+    public: bool = False  # the hosted demo: sandbox only, no real Meta login
+    meta: dict = field(default_factory=dict)  # login state, token and granted accounts; memory only
 
     def run(self, label: str, coro) -> None:
         if self.busy:
@@ -112,6 +119,43 @@ class Note(BaseModel):
     note: str = ""
 
 
+class Rules(BaseModel):
+    """A change to the house rules. Missing fields keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset: Literal["conservative", "balanced", "aggressive"] | None = None
+    daily_budget_cap: float | None = Field(None, gt=0, le=100_000)
+    max_budget_change_pct: float | None = Field(None, gt=0, le=1)
+    min_days_between_budget_changes: int | None = Field(None, ge=0, le=30)
+    min_spend_multiple_before_pause: float | None = Field(None, ge=0, le=10)
+    protect_learning_phase: bool | None = None
+
+
+class Facts(BaseModel):
+    """A change to the numbers the team plans with. Missing fields keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weekly_budget: float | None = Field(None, gt=0, le=1_000_000)
+    target_cost_per_result: float | None = Field(None, gt=0, le=100_000)
+    test_budget_share: float | None = Field(None, gt=0, le=1)
+
+
+class Connect(BaseModel):
+    kind: Literal["sandbox", "meta"] = "sandbox"
+    account_id: str | None = None
+    level: int = Field(access.DEFAULT_LEVEL, ge=0, le=2)
+    rules: Rules | None = None
+
+
+class Level(BaseModel):
+    level: int = Field(ge=0, le=2)
+
+
+MAX_UPLOAD = 5 * 1024 * 1024
+
+
 def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | None = 7) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app):
@@ -180,6 +224,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             raise HTTPException(409, "This version is not waiting on you")
         if team.busy:
             raise HTTPException(409, f"The team is busy: {team.busy}")
+        if not access.can_propose(team.ws):
+            raise HTTPException(409, "The team is set to L0 Observe and acts on nothing. Raise "
+                                     "the level in Settings to approve proposals.")
         approved = None
         if record.kind == "ChangeSet" and record.content.get("changes"):
             approved = [g.change_index for g in ChangeSet.model_validate(record.content).gate
@@ -189,6 +236,14 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         except (PermissionError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
         period = key.split("/")[0]
+        if key.endswith("/change_set") and not access.can_apply(team.ws):
+            content = record.content
+            team.ws.events.append(
+                "changeset.handed_off", "operator",
+                {"key": key, "changes": len(approved or []),
+                 "ads": len(content.get("ad_drafts") or [])},
+                refs=[record.artifact_id], sim_day=team.account.day if team.account else None)
+            return {"ok": True, "handed_off": True}
         if key.endswith("/test_plan") and period.startswith("week"):
             week = int(period[4:])
             team.run("Producing creative", produce_week(
@@ -210,12 +265,39 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     @app.post("/api/send-back/{key:path}")
     async def send_back(key: str, body: Note):
+        """Record the owner's note, then have the role that made this version redo it with the
+        note as the first issue to fix. The new version comes back for approval as usual."""
+        from pgt.loops.daily import revise_day
+        from pgt.loops.weekly import produce_week, revise_plan
+
         record = _record(key)
+        note = body.note.strip()
         if views.Index.build(team.ws).waiting(record) is None:
             raise HTTPException(409, "This version is not waiting on you")
-        team.ws.events.append("approval.returned", "user", {"key": key, "note": body.note.strip()},
+        if not note:
+            raise HTTPException(400, "Say what should change, so the team knows what to redo")
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}")
+        period, _, kind = key.partition("/")
+        redo, label = None, None
+        if period.startswith("week") and kind == "test_plan":
+            label = "Redoing the test plan"
+            redo = revise_plan(team.ws, team.account, team.model, note, week=int(period[4:]),
+                               meter=team.meter)
+        elif period.startswith("week") and kind == "change_set":
+            label = "Redoing the creative"
+            redo = produce_week(team.ws, team.account, team.model, team.media, team.media_dir,
+                                week=int(period[4:]), meter=team.meter, note=note)
+        elif (period.startswith("day") and kind == "change_set" and team.account
+              and int(period[3:]) == team.account.day):
+            label = "Redoing today's change set"
+            redo = revise_day(team.ws, team.account, team.model, note, meter=team.meter)
+        team.ws.events.append("approval.returned", "user",
+                              {"key": key, "note": note, "redo": redo is not None},
                               refs=[record.artifact_id], sim_day=record.sim_day)
-        return {"ok": True}
+        if redo is not None:
+            team.run(label, redo)
+        return {"ok": True, "redo": redo is not None}
 
     @app.post("/api/messages")
     async def post_message(body: Message):
@@ -241,7 +323,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             brief = await run_daily_check(team.ws, team.account, team.model, team.meter)
             key = f"day{team.account.day}/change_set"
             record = team.ws.artifacts.latest(key)
-            if (record and brief.review and brief.review.verdict == "pass"
+            if (record and access.can_propose(team.ws)
+                    and brief.review and brief.review.verdict == "pass"
                     and any(g.allowed for g in ChangeSet.model_validate(record.content).gate)):
                 team.ws.events.append("approval.requested", "media_buyer",
                                       {"key": key, "what": "change set"},
@@ -257,6 +340,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         if team.account is None:
             raise HTTPException(409, "The demo week is still being set up")
+        if not access.can_propose(team.ws):
+            raise HTTPException(409, "The team is set to L0 Observe, so it does not plan tests. "
+                                     "Raise the level in Settings first.")
         team.run("Planning the week",
                  plan_week(team.ws, team.account, team.model, meter=team.meter))
         return {"ok": True}
@@ -279,6 +365,182 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "day": team.account.day if team.account else None,
             "now": datetime.now(UTC).isoformat(),
         }
+
+    def _day():
+        return team.account.day if team.account else None
+
+    @app.get("/api/access")
+    async def get_access():
+        facts = team.ws.facts.current()
+        return {
+            "connection": access.connection(team.ws),
+            "level": access.level(team.ws),
+            "levels": access.LEVELS,
+            "sandbox": access.SANDBOX,
+            "public": team.public,
+            "meta_login": meta_login.unavailable(team.public),
+            "meta_accounts": team.meta.get("accounts", []),
+            "rules": facts.house_rules.model_dump(mode="json"),
+            "presets": PRESETS,
+            "weekly_budget": facts.weekly_budget,
+            "weekly_test_budget": round(facts.weekly_budget * facts.test_budget_share, 2),
+            "constraints": facts.constraints,
+            "fact_version": team.ws.facts.version,
+        }
+
+    def _set_rules(body: Rules) -> int:
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}. Change the rules after.")
+        facts = team.ws.facts.current()
+        values = facts.house_rules.model_dump()
+        if body.preset:
+            values.update(PRESETS[body.preset], preset=body.preset)
+        fields = body.model_dump(exclude_none=True, exclude={"preset"})
+        if fields:
+            values.update(fields, preset="custom")
+        rules = HouseRules(**values)
+        if rules == facts.house_rules:
+            return team.ws.facts.version
+        return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user")
+
+    def _refresh(before: int) -> bool:
+        """After the owner changed a fact, redo the stale work that needs no model."""
+        from pgt.loops.refresh import refresh
+
+        if team.ws.facts.version == before or team.account is None:
+            return False
+        changed = team.ws.events.list("fact.changed")[-1].payload["changed"]
+        team.run("Re-running stale work", refresh(team.ws, team.account, changed))
+        return True
+
+    @app.post("/api/house-rules")
+    async def house_rules(body: Rules):
+        before = team.ws.facts.version
+        version = _set_rules(body)
+        return {"ok": True, "fact_version": version, "refresh": _refresh(before)}
+
+    @app.post("/api/facts")
+    async def set_facts(body: Facts):
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}. Change the facts after.")
+        before = team.ws.facts.version
+        update = body.model_dump(exclude_none=True)
+        if update:
+            team.ws.facts.set(team.ws.facts.current().model_copy(update=update), "user")
+        return {"ok": True, "fact_version": team.ws.facts.version, "refresh": _refresh(before)}
+
+    @app.post("/api/access/connect")
+    async def connect(body: Connect):
+        if body.kind == "sandbox":
+            account = dict(access.SANDBOX)
+        else:
+            reason = meta_login.unavailable(team.public)
+            if reason:
+                raise HTTPException(409, reason)
+            granted = {a["account_id"]: a for a in team.meta.get("accounts", [])}
+            if body.account_id not in granted:
+                raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
+            account = granted[body.account_id]
+        try:
+            access.connect(team.ws, account, body.level, sim_day=_day())
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if body.rules:
+            before = team.ws.facts.version
+            _set_rules(body.rules)
+            _refresh(before)
+        return {"ok": True}
+
+    @app.post("/api/access/level")
+    async def set_level(body: Level):
+        current = access.connection(team.ws)
+        if current and current.get("kind") == "meta" and body.level > access.PROPOSE:
+            raise HTTPException(409, "A real Meta ad account is read-only in this build (L0 or L1)")
+        access.set_level(team.ws, body.level, sim_day=_day())
+        return {"ok": True, "level": body.level}
+
+    @app.post("/api/access/disconnect")
+    async def disconnect():
+        access.disconnect(team.ws, sim_day=_day())
+        team.meta.clear()
+        return {"ok": True}
+
+    @app.get("/api/meta/login")
+    async def meta_start(request: Request):
+        """Send the owner to Facebook Login for Business on facebook.com. Local installs only."""
+        reason = meta_login.unavailable(team.public)
+        if reason:
+            raise HTTPException(409, reason)
+        state = meta_login.new_state()
+        redirect = str(request.url_for("meta_callback"))
+        team.meta = {"state": state, "redirect": redirect}
+        return RedirectResponse(meta_login.login_url(redirect, state), status_code=302)
+
+    @app.get("/api/meta/callback", name="meta_callback")
+    async def meta_callback(code: str = "", state: str = "", error: str = ""):
+        expected = team.meta.get("state")
+        if error or not code:
+            team.meta.clear()
+            return RedirectResponse("/#/settings?meta=cancelled", status_code=302)
+        if not expected or not secrets.compare_digest(state, expected):
+            team.meta.clear()
+            raise HTTPException(400, "Login state does not match. Start again from Settings.")
+        try:
+            token = await asyncio.to_thread(meta_login.exchange, code, team.meta["redirect"])
+            accounts = await asyncio.to_thread(meta_login.ad_accounts, token)
+        except Exception:  # noqa: BLE001 - the token and Meta's reply are not shown or logged
+            team.meta.clear()
+            return RedirectResponse("/#/settings?meta=failed", status_code=302)
+        team.meta = {"token": token, "accounts": accounts}
+        return RedirectResponse("/#/settings?meta=pick", status_code=302)
+
+    @app.get("/api/dashboard")
+    async def dashboard(days: int = 7):
+        return board.dashboard(team.ws, team.account, days)
+
+    @app.get("/api/assets")
+    async def assets():
+        return board.assets(team.ws, team.account, team.media_dir)
+
+    @app.post("/api/assets/upload")
+    async def upload(request: Request, name: str = "upload.png"):
+        """A product photo from the owner. Checked as an image, re-saved as PNG, never trusted."""
+        import hashlib
+        import io
+        import re
+
+        from PIL import Image, UnidentifiedImageError
+
+        body = await request.body()
+        if not body:
+            raise HTTPException(400, "Empty upload")
+        if len(body) > MAX_UPLOAD:
+            raise HTTPException(413, "Images up to 5 MB")
+        try:
+            img = Image.open(io.BytesIO(body))
+            if img.format not in ("PNG", "JPEG"):
+                raise HTTPException(415, "PNG or JPEG only")
+            if img.width * img.height > 40_000_000:
+                raise HTTPException(413, "Image too large")
+            img.load()
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+            raise HTTPException(415, "Not an image") from exc
+        img = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        data = out.getvalue()
+        digest = hashlib.sha256(data).hexdigest()[:12]
+        folder = Path(team.media_dir) / "uploads"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{digest}.png"
+        path.write_bytes(data)
+        clean = re.sub(r"[^A-Za-z0-9 ._-]", "", Path(name).name)[:80] or "upload.png"
+        sim_day = team.account.day if team.account else None
+        team.ws.events.append("asset.uploaded", "user", {
+            "file": path.name, "path": str(path), "name": clean,
+            "width": img.width, "height": img.height, "sha256": digest,
+        }, sim_day=sim_day)
+        return {"ok": True, "id": f"upload/{path.name}"}
 
     @app.get("/api/media/{rel:path}")
     async def media(rel: str):

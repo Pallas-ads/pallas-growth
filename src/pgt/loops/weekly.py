@@ -62,6 +62,7 @@ from pgt.schemas import (
     PlanTest,
     SharedFacts,
     TestPlan,
+    WeeklyBrief,
     WeeklyReviewSummary,
 )
 
@@ -238,11 +239,54 @@ async def plan_week(
             scope, "reviewer", "Market research failed review twice.", [research_rec.artifact_id]
         )
         return _summary(scope, week, "escalated")
+    return await _draft_plan(
+        scope, model, state, week, brief, brief_rec, findings, findings_rec, research, research_rec
+    )
+
+
+def owner_issue(note: str) -> str:
+    return f"From the owner, who sent the last version back: {note}"
+
+
+async def revise_plan(
+    ws: Workspace,
+    account: SandboxAccount,
+    model: Model,
+    note: str,
+    week: int | None = None,
+    meter: CostMeter | None = None,
+) -> WeeklyReviewSummary:
+    """The owner sent the test plan back: redraft it from the same reviewed brief, findings and
+    research, with the owner's note as the first issue to fix, and ask again."""
+    week = week or current_week(account)
+    scope = _scope(ws, account, week, meter)
+    records = {k: ws.artifacts.latest(f"week{week}/{k}") for k in ("brief", "findings", "research")}
+    if any(r is None for r in records.values()):
+        raise ValueError(f"Week {week} has no reviewed brief, findings and research to redo from")
+    handoff(scope, "system", "growth_lead", f"Redo the test plan with the owner's note: {note}",
+            [records["brief"].artifact_id])
+    return await _draft_plan(
+        scope, model, account.state(), week,
+        WeeklyBrief.model_validate(records["brief"].content), records["brief"],
+        Findings.model_validate(records["findings"].content), records["findings"],
+        MarketResearch.model_validate(records["research"].content), records["research"],
+        owner=[owner_issue(note)],
+    )
+
+
+async def _draft_plan(
+    scope: Scope, model: Model, state, week: int, brief: WeeklyBrief, brief_rec,
+    findings: Findings, findings_rec, research: MarketResearch, research_rec,
+    owner: list[str] = (),
+) -> WeeklyReviewSummary:
+    """Growth Lead drafts the test plan, code checks it (one redo), then it waits on the owner.
+    `owner` holds the owner's note when they sent the last version back."""
+    ws, log, day = scope.ws, scope.ws.events.append, scope.sim_day
+    facts, fv = ws.facts.current(), ws.facts.version
     insights = {
         f"ins-w{week}-{i + 1}": insight.model_dump(mode="json")
         for i, insight in enumerate(research.insights)
     }
-
     available = round(facts.weekly_budget * facts.test_budget_share, 2)
     account_view = {
         "campaigns": [c.model_dump(mode="json") for c in state.campaigns],
@@ -254,31 +298,22 @@ async def plan_week(
         "active_campaign_ids": {c.campaign_id for c in state.campaigns if c.status == "ACTIVE"},
         "ad_ids": {a.ad_id for a in state.ads},
     }
-    draft = await run_plan(
-        scope, model, facts, fv, week, brief, findings.findings, insights, account_view, available
-    )
+
+    async def draft_with(issues: list[str]):
+        return await run_plan(scope, model, facts, fv, week, brief, findings.findings, insights,
+                              account_view, available, issues)
+
+    draft = await draft_with(list(owner))
     issues = check_plan(draft, **plan_kwargs)
     if issues:
         log(
             "review.redo",
             "reviewer",
             {"subject": "test_plan", "by": "code", "issues": issues},
-            sim_day=account.day,
+            sim_day=day,
             loop_id=scope.loop_id,
         )
-        draft = await run_plan(
-            scope,
-            model,
-            facts,
-            fv,
-            week,
-            brief,
-            findings.findings,
-            insights,
-            account_view,
-            available,
-            issues,
-        )
+        draft = await draft_with([*owner, *issues])
         issues = check_plan(draft, **plan_kwargs)
     if issues:
         escalate(scope, "reviewer", "The test plan failed review twice: " + " ".join(issues))
@@ -302,7 +337,7 @@ async def plan_week(
         inputs=[brief_rec.artifact_id, findings_rec.artifact_id, research_rec.artifact_id],
         fact_version=fv,
         fact_keys=PLAN_FACT_KEYS,
-        sim_day=account.day,
+        sim_day=day,
         status="in_review",
     )
     log(
@@ -310,7 +345,7 @@ async def plan_week(
         "growth_lead",
         {"key": plan.plan_id, "what": "test plan"},
         refs=[plan_rec.artifact_id],
-        sim_day=account.day,
+        sim_day=day,
         loop_id=scope.loop_id,
     )
     return _summary(scope, week, "awaiting_plan_approval", plan_id=plan.plan_id)
@@ -365,7 +400,10 @@ async def produce_week(
     week: int | None = None,
     product_shot: Image.Image | None = None,
     meter: CostMeter | None = None,
+    note: str | None = None,
 ) -> WeeklyReviewSummary:
+    """`note` is set when the owner sent the new ads back: every Producer starts again with it
+    as the first issue to fix, and attempts carry on from the last version."""
     week = week or current_week(account)
     plan_key = f"week{week}/test_plan"
     _require_approval(ws, plan_key, "produce", account.day)
@@ -383,29 +421,44 @@ async def produce_week(
     evidence_ids = sorted({i for f in findings.findings for i in f.evidence_ids})
     evidence = [ws.ledger.get(i) for i in evidence_ids if ws.ledger.has(i)]
 
-    # The product photo is segmented once with SAM 3.1 and reused for every test.
+    # The product photo is segmented once with SAM 3.1 and reused for every test; skipped when
+    # every ad is reused as it was.
     media_dir = Path(media_dir) / f"week{week}"
-    if product_shot is None:
-        product_shot, _ = make_demo_product_shot()
-    save_png(product_shot, media_dir / "product_shot.png")
-    try:
-        boxes = await media.segment(scope, "producer", product_shot, "phone")
-    except ValueError:
-        escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
-        return _summary(scope, week, "escalated", plan_id=plan.plan_id)
-    product = cutout(product_shot, boxes[0])
+    product = None
+    if note or any(_reusable(ws, week, t.test_id) is None for t in plan.tests):
+        if product_shot is None:
+            product_shot, _ = make_demo_product_shot()
+        save_png(product_shot, media_dir / "product_shot.png")
+        try:
+            boxes = await media.segment(scope, "producer", product_shot, "phone")
+        except ValueError:
+            escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
+            return _summary(scope, week, "escalated", plan_id=plan.plan_id)
+        product = cutout(product_shot, boxes[0])
     backgrounds: dict[str, Image.Image] = {}
 
     async def answer_for(question: str, issues: list[str]):
         return await run_answer(scope, model, facts, fv, question, evidence, issues)
 
     async def produce(test: PlanTest) -> CreativeSet | None:
-        handoff(
-            scope, "growth_lead", "producer", f"Creative for {test.test_id}", [plan_rec.artifact_id]
-        )
+        reused = None if note else _reusable(ws, week, test.test_id)
+        if reused is not None:
+            ws.events.append(
+                "creative.reused", "growth_lead",
+                {"test_id": test.test_id, "creative_id": reused.creative_id},
+                refs=[ws.artifacts.latest(f"week{week}/creative/{test.test_id}").artifact_id],
+                sim_day=account.day, loop_id=scope.loop_id,
+            )
+            return reused
+        task = f"Creative for {test.test_id}"
+        if note:
+            task = f"Redo the creative for {test.test_id} with the owner's note: {note}"
+        handoff(scope, "growth_lead", "producer", task, [plan_rec.artifact_id])
         ask = ask_tool(scope, "producer", "analyst", test.test_id, answer_for)
-        issues: list[str] = []
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        issues: list[str] = [owner_issue(note)] if note else []
+        last = ws.artifacts.latest(f"week{week}/creative/{test.test_id}")
+        first = last.content["attempt"] + 1 if last else 1
+        for attempt in range(first, first + MAX_ATTEMPTS):
             ad_copy = await run_producer(scope, model, facts, fv, test, insights, ask, issues)
             creative_id = f"{test.test_id}-c{attempt}"
             images, square = await _render(
@@ -513,6 +566,17 @@ async def produce_week(
         creative_ids=creative_ids,
         change_set_id=change_set.change_set_id,
     )
+
+
+def _reusable(ws: Workspace, week: int, test_id: str) -> CreativeSet | None:
+    """The last creative for this test, if it passed review and nothing it used has changed
+    since (a re-split budget keeps it; see loops/refresh.py)."""
+    creative = ws.artifacts.latest(f"week{week}/creative/{test_id}")
+    review = ws.artifacts.latest(f"week{week}/review/{test_id}")
+    if (creative is None or creative.status in ("stale", "superseded") or review is None
+            or review.content.get("verdict") != "pass" or review.inputs != [creative.artifact_id]):
+        return None
+    return CreativeSet.model_validate(creative.content)
 
 
 async def _render(

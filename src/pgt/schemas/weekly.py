@@ -141,7 +141,7 @@ class CreativeImage(_Out):
 class CreativeSet(_Out):
     creative_id: str  # "w1-t1-c1"
     test_id: str
-    attempt: int  # 1 for the first draft, 2 and 3 after redos
+    attempt: int  # 1 for the first draft; counts on through redos and send-backs
     ad_copy: CreativeCopy
     images: list[CreativeImage]
     question_ids: list[str]  # ask/answer events this set relied on

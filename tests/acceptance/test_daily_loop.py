@@ -8,6 +8,7 @@ from pgt.harness.workspace import Workspace
 from pgt.llm.fake import MetaFake
 from pgt.llm.meta import responses_model
 from pgt.llm.offline import offline_model, offline_responder
+from pgt.loops.daily import revise_day
 from pgt.loops.simulate import simulate
 from pgt.schemas import Change, ChangeSet, ChangeSetDraft
 from pgt.schemas import TestReadout as Readout
@@ -134,3 +135,22 @@ def test_workspace_survives_reopen(tmp_path):
     assert reopened.artifacts.latest("day3/brief") is not None
     assert reopened.approvals.is_valid("day3/change_set")
     reopened.close()
+
+
+def test_send_back_has_the_media_buyer_redo_today():
+    model, _ = offline_model()
+    sim = asyncio.run(simulate(3, model, auto_approve=False))
+    ws, account = sim.ws, sim.account
+    first = ws.artifacts.latest("day3/change_set")
+    assert any(g["allowed"] for g in first.content["gate"])
+
+    asyncio.run(revise_day(ws, account, model, "Keep the budgets where they are"))
+    second = ws.artifacts.latest("day3/change_set")
+    assert second.version == first.version + 1
+    assert ws.artifacts.get(first.artifact_id).status in ("superseded", "stale")
+    assert second.content["summary"].startswith("Redone after the owner's note.")
+    handoff = ws.events.list("task.handoff", loop_id="daily-d3")[-1]
+    assert handoff.payload["to"] == "media_buyer" and "Keep the budgets" in handoff.payload["task"]
+    request = ws.events.list("approval.requested")[-1]
+    assert request.refs == [second.artifact_id]
+    assert ws.artifacts.latest("day3/review").content["verdict"] == "pass"

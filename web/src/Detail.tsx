@@ -160,7 +160,7 @@ function Footer({ d, onDone }: { d: D; onDone: () => void }) {
       {noteOpen && (
         <div className="note-box">
           <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)}
-                    placeholder="What should change? The note goes to the room thread." />
+                    placeholder="What should change? The team redoes this version with your note, and it comes back to you." />
           <div className="row" style={{ gap: 8 }}>
             <button className="btn ink xs" disabled={busy} onClick={() => act(() => api.sendBack(d.key, text))}>Send back</button>
             <button className="btn ghost xs" onClick={() => setNoteOpen(false)}>Cancel</button>
