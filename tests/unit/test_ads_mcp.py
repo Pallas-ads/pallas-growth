@@ -1,5 +1,6 @@
 """Reads through the Ads MCP, with the Graph API as the fallback, against fakes (no network)."""
 
+import json
 from datetime import date
 
 import pytest
@@ -27,10 +28,12 @@ SCHEMA = {
 class FakeMcp:
     """Answers MCP JSON-RPC like the Ads MCP server, from the same data as the fake Graph."""
 
-    def __init__(self, graph: FakeGraph, schema=SCHEMA, drop: tuple[str, ...] = ()):
+    def __init__(self, graph: FakeGraph, schema=SCHEMA, drop: tuple[str, ...] = (),
+                 text_rows: bool = False):
         self.graph = graph
         self.schema = schema
         self.drop = drop  # fields this server leaves out of its rows
+        self.text_rows = text_rows  # rows as a JSON string, spend as amount_spent {"value": ..}
         self.calls: list[dict] = []
         self.headers: list[dict] = []
         self.fail_next = False
@@ -58,8 +61,13 @@ class FakeMcp:
         rows = self._rows(args)
         rows = [{k: _without(v, self.drop) for k, v in r.items() if k not in self.drop}
                 for r in rows]
-        reply = {"content": [{"type": "text", "text": "ignored"}],
-                 "structuredContent": {"data": rows}}
+        content = {"data": rows}
+        if self.text_rows:
+            rows = [{("amount_spent" if k == "spend" else k):
+                     ({"value": v, "unit": "USD"} if k == "spend" else v) for k, v in r.items()}
+                    for r in rows]
+            content = {"ad_entities": json.dumps(rows)}
+        reply = {"content": [{"type": "text", "text": "ignored"}], "structuredContent": content}
         return {"jsonrpc": "2.0", "id": body["id"], "result": reply}, {}
 
     def _rows(self, args):
@@ -69,7 +77,7 @@ class FakeMcp:
         if args["level"] == "AD" and args.get("date_preset") == "maximum":
             return [{"id": "a1", "spend": 210.5, "actions": {"mobile_app_install": 30}}]
         if args["level"] == "AD" and "time_range" in args:
-            assert args["time_increment"] == 1
+            assert args["time_increment"] == (1 if self.schema is SCHEMA else "1")
             return [{"date": "2026-10-23", "ad_id": "a1", "ad_set_id": "111",
                      "metrics": {"spend": 40, "impressions": 2000, "reach": 1000, "clicks": 50,
                                  "actions": [{"action_type": "mobile_app_install",
@@ -110,13 +118,29 @@ def test_every_read_goes_through_the_mcp_and_matches_the_graph():
     assert graph.reads == []  # nothing read from the Graph API
     assert acc.read_sources()["reads"] == {"ad_sets": "mcp", "ads": "mcp", "lifetime": "mcp",
                                            "daily": "mcp"}
-    assert fake.calls[0]["ad_account_id"] == "act_42" and fake.calls[0]["level"] == "ADSET"
+    assert fake.calls[0]["ad_account_id"] == "42" and fake.calls[0]["level"] == "ADSET"
 
     plain = MetaAccount(Graph(TOKEN, FakeGraph()), "42", ORIGIN, adset_ids=["111", "222"],
                         today=lambda: date(2026, 10, 30))
     assert state == plain.state()
     assert rows == plain.insights()
     assert plain.read_sources()["mcp"] is False
+
+
+def test_rows_sent_as_a_json_string_with_spend_as_amount_spent_are_read():
+    graph = CountingGraph()
+    schema = {**SCHEMA, "properties": {**SCHEMA["properties"],
+                                       "time_increment": {"type": "string"},
+                                       "time_range": {"type": "string"}}}
+    fake = FakeMcp(graph, schema=schema, text_rows=True)
+    acc = account(graph, fake)
+    state, rows = acc.state(), acc.insights()
+    assert graph.reads == []
+    assert set(acc.read_sources()["reads"].values()) == {"mcp"}
+    daily = next(c for c in fake.calls if "time_range" in c)
+    assert json.loads(daily["time_range"]) == {"since": "2026-10-23", "until": "2026-10-29"}
+    assert state.ad("a1").lifetime_spend == 210.5
+    assert [r.spend for r in rows] == [40, 45]
 
 
 def test_a_read_the_mcp_cannot_make_falls_back_to_the_graph():
