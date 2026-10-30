@@ -10,10 +10,12 @@ const usd = (n: number | null | undefined, digits = 2) =>
   n == null ? "–" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const int = (n: number | null | undefined) => (n == null ? "–" : n.toLocaleString("en-US"));
 const pct = (n: number | null | undefined) => (n == null ? "–" : (n * 100).toFixed(2) + "%");
+const ratio = (n: number | null | undefined) => (n == null ? "–" : n.toFixed(2) + "x");
 
 function fmt(k: Kpi): string {
   if (k.fmt === "money") return usd(k.value);
   if (k.fmt === "pct") return pct(k.value);
+  if (k.fmt === "ratio") return ratio(k.value);
   return int(k.value);
 }
 
@@ -114,12 +116,12 @@ function Chip({ id }: { id: string }) {
   return <span className="chip" title="Evidence id: one Insights row, or a figure computed from them">{id}</span>;
 }
 
-function cells(m: Metrics) {
+function cells(m: Metrics, roas: boolean) {
   const none = m.impressions === 0;
   return (
     <>
       <td className="num">{none ? "–" : usd(m.spend)}</td>
-      <td className="num">{none ? "–" : int(m.impressions)}</td>
+      <td className="num">{none ? "–" : roas ? ratio(m.roas) : int(m.impressions)}</td>
       <td className="num">{none ? "–" : pct(m.ctr)}</td>
       <td className="num">{none ? "–" : int(m.results)}</td>
       <td className={"num " + m.tone}>{none ? "–" : usd(m.cpr)}</td>
@@ -128,11 +130,12 @@ function cells(m: Metrics) {
 }
 
 function Table({ d }: { d: Ready }) {
+  const roas = d.kpis.some((k) => k.key === "roas");
   const name = d.result_name.charAt(0).toUpperCase() + d.result_name.slice(1);
   return (
     <table className="dtbl">
       <thead><tr><th>Name</th><th>Status</th><th className="num">Budget/day</th><th className="num">Spend</th>
-        <th className="num">Impr.</th><th className="num">CTR</th><th className="num">{name}s</th>
+        <th className="num">{roas ? "ROAS" : "Impr."}</th><th className="num">CTR</th><th className="num">{name}s</th>
         <th className="num">Cost/{d.result_name}</th><th className="num" style={{ paddingRight: 0 }}>Evidence</th></tr></thead>
       <tbody>
         {d.campaigns.map((c) => [
@@ -141,7 +144,7 @@ function Table({ d }: { d: Ready }) {
               {c.in_learning && <span className="mono muted" style={{ fontSize: 10.5, fontWeight: 400 }}> · learning</span>}</td>
             <td><span className={"lbl " + c.status}>{c.status_label}</span></td>
             <td className="num">{usd(c.budget, 0)}</td>
-            {cells(c)}
+            {cells(c, roas)}
             <td style={{ textAlign: "right", paddingRight: 0 }}>
               <span className="mono muted" style={{ fontSize: 10.5 }}>{c.rows} rows</span></td>
           </tr>,
@@ -150,7 +153,7 @@ function Table({ d }: { d: Ready }) {
               <td>{a.name} <span className="mono muted" style={{ fontSize: 10.5 }}>{a.id}</span></td>
               <td><span className={"lbl " + a.status}>{a.status_label}</span></td>
               <td className="num" />
-              {cells(a)}
+              {cells(a, roas)}
               <td style={{ textAlign: "right", paddingRight: 0 }}>
                 {a.evidence ? <Chip id={a.evidence} />
                   : a.waits ? <span className="mono muted" style={{ fontSize: 10.5 }}>waits on you</span> : null}
@@ -240,7 +243,7 @@ export default function Dashboard({ tick, route, sidebar }: { tick: number; rout
       <main className="col scroll top" style={{ padding: "16px 26px 18px", gap: 10, minWidth: 0 }}>
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <div className="eyebrow">{data?.account_name ?? "Pallas Fit sandbox"}{d ? ` · days ${d.start} to ${d.end}` : ""}</div>
+            <div className="eyebrow">{data?.account_name ?? "Sandbox"}{d ? ` · days ${d.start} to ${d.end}` : ""}</div>
             <div className="h1" style={{ marginTop: 4 }}>Dashboard</div>
           </div>
           <div className="row" style={{ gap: 10 }}>

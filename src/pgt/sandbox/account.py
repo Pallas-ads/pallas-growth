@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from pgt.schemas.ads import AccountState, AdState, InsightRow, Status
 
-from .scenario import AdPerformance, Scenario, fitness_app_drafts
+from .scenario import Scenario
 
 
 class SandboxAccount:
@@ -25,6 +25,10 @@ class SandboxAccount:
         self._impressions = dict.fromkeys((ad.ad_id for ad in scenario.ads), 0)
         self._reach = dict.fromkeys((ad.ad_id for ad in scenario.ads), 0)
         self._changes: list[dict] = []
+
+    @property
+    def scenario(self) -> Scenario:
+        return self._scenario
 
     @property
     def day(self) -> int:
@@ -104,6 +108,8 @@ class SandboxAccount:
                     ctr=round(clicks / impressions, 6) if impressions else 0.0,
                     cost_per_result=round(spend / results, 2) if results else None,
                     frequency=round(frequency, 2),
+                    purchase_value=None if params.avg_order_value is None else round(
+                        results * params.avg_order_value * rng.uniform(0.92, 1.08), 2),
                 )
                 new_rows.append(row)
                 ad.lifetime_spend = round(ad.lifetime_spend + spend, 2)
@@ -133,7 +139,7 @@ class SandboxAccount:
         """The synthetic Ads Manager drafts, normalized the same way as a real account's."""
         from pgt.ads.ads_mcp import draft_node
 
-        return [draft_node(d) for d in fitness_app_drafts()]
+        return [draft_node(d) for d in self._scenario.drafts]
 
     def changes(self) -> list[dict]:
         """Every write the Operator made, in order, each with the sim day it happened on."""
@@ -217,7 +223,7 @@ class SandboxWriter:
             ad_id=ad_id, campaign_id=campaign_id, name=name, status="PAUSED",
             created_day=account.day, lifetime_spend=0.0, lifetime_results=0,
         ))
-        account._scenario.performance[ad_id] = AdPerformance()
+        account._scenario.performance[ad_id] = account._scenario.new_ad.model_copy()
         account._impressions[ad_id] = 0
         account._reach[ad_id] = 0
         self._record("ad_created", ad_id=ad_id, campaign_id=campaign_id, name=name, status="PAUSED")

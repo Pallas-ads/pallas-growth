@@ -293,7 +293,7 @@ export function Wizard({ a, start, onClose, onDone }: {
           <div className="col" style={{ gap: 10 }}>
             <button className={"pick" + (kind === "sandbox" ? " on" : "")} onClick={() => pick("sandbox")}>
               <span className="rd" /><div><div className="n">Use the sandbox account <span className="lbl src">Demo</span></div>
-                <div className="d">A synthetic fitness app, Pallas Fit, with a week of results already in. No Meta login, nothing real is touched. This is what the public demo runs on.</div></div>
+                <div className="d">{a.sandbox.blurb ?? "A synthetic business with results already in."} No Meta login, nothing real is touched. This is what the public demo runs on.</div></div>
             </button>
             <button className={"pick" + (kind === "meta" ? " on" : "") + (metaOff ? " dis" : "")} disabled={!!metaOff} onClick={() => pick("meta")}>
               <span className="rd" /><div><div className="n">Connect a Meta ad account <span className="lbl paused">Local only</span></div>

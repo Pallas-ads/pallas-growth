@@ -63,8 +63,8 @@ function Row({ d }: { d: Deliverable }) {
   );
 }
 
-export default function Deliverables({ items, route, sidebar }: {
-  items: Deliverable[]; route: Route; sidebar: ReactNode;
+export default function Deliverables({ items, accountName, route, sidebar }: {
+  items: Deliverable[]; accountName?: string; route: Route; sidebar: ReactNode;
 }) {
   const tab = route.q.get("tab") ?? "all";
   const from = route.q.get("from") ?? "all";
@@ -105,7 +105,7 @@ export default function Deliverables({ items, route, sidebar }: {
       <main className="col" style={{ padding: "18px 28px 18px", minWidth: 0 }}>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
           <div>
-            <div className="eyebrow">Pallas Fit sandbox · {items.length} {items.length === 1 ? "item" : "items"}</div>
+            <div className="eyebrow">{accountName ?? "Sandbox"} · {items.length} {items.length === 1 ? "item" : "items"}</div>
             <div className="h1" style={{ marginTop: 4 }}>Deliverables</div>
           </div>
           <div className="seg" role="tablist">

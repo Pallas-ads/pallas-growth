@@ -10,7 +10,7 @@ from pgt.harness.policy import CostMeter
 from pgt.harness.workspace import Workspace
 from pgt.loops.daily import run_daily_check
 from pgt.roles.operator import apply_change_set
-from pgt.sandbox import SandboxAccount, fitness_app_facts, fitness_app_scenario
+from pgt.sandbox import TEMPLATES, SandboxAccount
 from pgt.schemas import ChangeSet, DailyBrief, ExecutionReceipt
 
 
@@ -30,13 +30,18 @@ async def simulate(
     plant_injection: bool = False,
     auto_approve: bool = True,
     meter: CostMeter | None = None,
+    template: str = "app",
+    account: SandboxAccount | None = None,
 ) -> Simulation:
     """Each day: the sandbox runs one day, then the team checks it. With `auto_approve`, the
-    simulation stands in for the user and approves only the changes the gate allowed."""
+    simulation stands in for the user and approves only the changes the gate allowed.
+    Pass `account` to keep simulating an account that already has history."""
     ws = ws or Workspace()
-    account = SandboxAccount(fitness_app_scenario(seed=seed, plant_injection=plant_injection))
+    chosen = TEMPLATES[template]
+    if account is None:
+        account = SandboxAccount(chosen.scenario(seed=seed, plant_injection=plant_injection))
     if ws.facts.version == 0:
-        ws.facts.set(fitness_app_facts(), "user")
+        ws.facts.set(chosen.facts(), "user")
     sim = Simulation(ws, account)
     for _ in range(days):
         account.advance_day()

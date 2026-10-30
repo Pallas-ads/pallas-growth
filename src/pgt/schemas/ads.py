@@ -63,6 +63,7 @@ class InsightRow(_Strict):
     ctr: float  # clicks / impressions, 0 when no impressions
     cost_per_result: float | None  # None when results == 0
     frequency: float  # cumulative impressions / cumulative reach since the ad launched
+    purchase_value: float | None = None  # revenue from results, when the account tracks it
 
 
 class Evidence(_Strict):

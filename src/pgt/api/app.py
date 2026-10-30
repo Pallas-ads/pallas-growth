@@ -47,6 +47,7 @@ class Team:
     db: str = ":memory:"  # the sandbox workspace; a real account gets its own file next to it
     model_name: str = ""
     parked: tuple | None = None  # the sandbox (ws, meter, account) while a real account is in use
+    template: str = "app"  # which synthetic business the sandbox runs: see pgt.sandbox.TEMPLATES
 
     @property
     def real(self) -> bool:
@@ -71,14 +72,52 @@ class Team:
         task.add_done_callback(self.tasks.discard)
 
 
-async def seed(team: Team, days: int = 7, seed: int = 7) -> None:
-    """Simulate a week of daily checks, then plan the weekly review up to the plan approval."""
-    from pgt.loops.simulate import simulate
-    from pgt.loops.weekly import plan_week
+async def seed(team: Team, days: int | None = None, seed: int = 7) -> None:
+    """Run the template's history, then plan this week's review up to the plan approval.
 
-    sim = await simulate(days, team.model, team.ws, seed=seed, meter=team.meter)
-    team.account = sim.account
-    await plan_week(team.ws, team.account, team.model, meter=team.meter)
+    Each earlier week is a full review the simulated owner approved: plan, new ads, then the
+    paused ads created. So a store two weeks in already has a creative library and a test live.
+    """
+    from pgt.loops.simulate import simulate
+    from pgt.loops.weekly import apply_week, plan_week, produce_week
+    from pgt.sandbox import TEMPLATES
+
+    days = days or 7 * TEMPLATES[team.template].history_weeks
+    account = None
+    while True:
+        week_days = min(7, days - (account.day if account else 0))
+        sim = await simulate(week_days, team.model, team.ws, seed=seed, meter=team.meter,
+                             template=team.template, account=account)
+        account = team.account = sim.account
+        summary = await plan_week(team.ws, account, team.model, meter=team.meter)
+        if account.day >= days:
+            return
+        if summary.stage != "awaiting_plan_approval":
+            raise RuntimeError(f"Seeding stopped at week {summary.week}: {summary.stage}")
+        _simulated_grant(team.ws, summary.plan_id, account.day)
+        summary = await produce_week(team.ws, account, team.model, team.media, team.media_dir,
+                                     meter=team.meter)
+        if summary.stage != "awaiting_change_approval":
+            raise RuntimeError(f"Seeding stopped at week {summary.week}: {summary.stage}")
+        key = f"week{summary.week}/change_set"
+        _simulated_grant(team.ws, key, account.day)
+        _, receipt = apply_week(team.ws, account)
+        # The Operator only creates ads paused; the owner turns them on in Ads Manager.
+        writer = account.writer()
+        for ad_id in receipt.created_ad_ids:
+            writer.set_ad_status(ad_id, "ACTIVE")
+        names = {a: account.state().ad(a).name for a in receipt.created_ad_ids}
+        team.ws.events.append("ads.turned_on", "system",
+                              {"ad_ids": receipt.created_ad_ids, "names": names},
+                              sim_day=account.day)
+
+
+def _simulated_grant(ws: Workspace, key: str, day: int) -> None:
+    """The seeded history stands in for the owner; the room says so."""
+    record = ws.artifacts.latest(key)
+    ws.events.append("approval.simulated", "system", {"key": key, "note": "Seeded history."},
+                     refs=[record.artifact_id], sim_day=day)
+    ws.approvals.grant(key, record, actor="user")
 
 
 def offline_team(db: str, media_dir: str) -> Team:
@@ -242,14 +281,17 @@ MAX_UPLOAD = 5 * 1024 * 1024
 def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | None = 7) -> FastAPI:
     """With `seed_days` the sandbox starts with that many simulated days already run. Without, the
     team starts cold: no history, and the sandbox account appears when the owner connects it."""
-    from pgt.sandbox import SandboxAccount, fitness_app_facts, fitness_app_scenario
+    from pgt.sandbox import TEMPLATES, SandboxAccount
+
+    template = TEMPLATES[team.template]
+    sandbox = dict(access.SANDBOX, name=template.sandbox_name, blurb=template.blurb)
 
     @asynccontextmanager
     async def lifespan(_app):
         if seed_days and not team.ws.events.list("loop.started"):
             team.run("Setting up the demo week", seed(team, seed_days))
         elif not seed_days and team.ws.facts.version == 0:
-            team.ws.facts.set(fitness_app_facts(), "user")
+            team.ws.facts.set(template.facts(), "user")
         yield
         for task in list(team.tasks):
             task.cancel()
@@ -300,7 +342,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     @app.get("/api/deliverables")
     async def deliverables():
-        return {"items": views.deliverables(team.ws, team.account)}
+        return {"items": views.deliverables(team.ws, team.account),
+                "account_name": board._which(team.ws, team.account)["account_name"]}
 
     @app.get("/api/deliverables/{key:path}")
     async def deliverable(key: str):
@@ -476,7 +519,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "connection": access.connection(team.ws),
             "level": access.level(team.ws),
             "levels": access.LEVELS,
-            "sandbox": access.SANDBOX,
+            "sandbox": sandbox,
             "public": team.public,
             "meta_login": meta_login.unavailable(team.public),
             "meta_accounts": team.meta.get("accounts", []),
@@ -531,9 +574,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             if team.busy:
                 raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
             leave_real_account(team)
-            account = dict(access.SANDBOX)
+            account = {k: v for k, v in sandbox.items() if k != "blurb"}
             if team.account is None and not seed_days:
-                team.account = SandboxAccount(fitness_app_scenario())
+                team.account = SandboxAccount(template.scenario())
         else:
             reason = meta_login.unavailable(team.public)
             if reason:
