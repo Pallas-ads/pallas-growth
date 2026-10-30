@@ -210,9 +210,11 @@ def test_upload_accepts_images_only(client):
     assert client.post("/api/assets/upload", content=b"").status_code == 400
 
 
-def test_first_run_connects_the_sandbox_with_a_level_and_rules(client):
+def test_seeded_history_starts_connected_and_reconnects_with_a_level_and_rules(client):
     a = client.get("/api/access").json()
-    assert a["connection"] is None and a["level"] == 2
+    assert a["connection"]["name"] == "Pallas Fit sandbox" and a["level"] == 2
+    assert client.get("/api/room").json()["items"][0]["label"].startswith(
+        "Connected Pallas Fit sandbox")
     assert a["meta_login"]  # no Meta app configured in tests
     r = client.post("/api/access/connect",
                     json={"kind": "sandbox", "level": 1, "rules": {"daily_budget_cap": 80}})
