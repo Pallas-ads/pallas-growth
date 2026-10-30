@@ -123,11 +123,14 @@ def _real_db(team: Team, account_id: str) -> str:
     return str(Path(team.db).with_name(f"meta-{account_id}.db"))
 
 
-def use_real_account(team: Team, account: dict, transport=None) -> dict:
+def use_real_account(team: Team, account: dict, transport=None, mcp_transport=None) -> dict:
     """Move the team onto a real ad account, in a workspace of its own.
 
-    The sandbox's history stays in its own file and comes back on disconnect. The token stays in
-    memory; the workspace keeps only the account id, the origin date and PGT's own writes."""
+    Reads go through Meta's Ads MCP (META_ADS_MCP=0 turns it off), with the Graph API as the
+    fallback; writes go through the Graph API. The sandbox's history stays in its own file and
+    comes back on disconnect. The token stays in memory; the workspace keeps only the account id,
+    the origin date and PGT's own writes."""
+    from pgt.ads.ads_mcp import AdsMcp
     from pgt.ads.graph import Graph
     from pgt.ads.meta_account import MetaAccount
     from pgt.harness.policy import CostMeter
@@ -152,8 +155,10 @@ def use_real_account(team: Team, account: dict, transport=None) -> dict:
     total = None if meter is None or meter.total is None else meter.remaining()
     team.parked = (team.ws, team.meter, team.account)
     team.ws, team.meter = ws, CostMeter(ws.events, total=total)
+    mcp = None if os.environ.get("META_ADS_MCP") == "0" else AdsMcp(token, mcp_transport)
     team.account = MetaAccount.from_env(
-        Graph(token, transport), account["account_id"], origin,
+        Graph(token, transport), account["account_id"], origin, mcp=mcp,
+        currency=account.get("currency") or None,
         changes=[e.payload for e in ws.events.list("meta.write")],
         on_write=lambda record: ws.events.append("meta.write", "operator", record,
                                                  sim_day=record["day"]),
@@ -231,6 +236,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
     app = FastAPI(title="Pallas Growth Team", lifespan=lifespan)
     app.state.team = team
     app.state.graph_transport = None  # tests put a fake Graph here
+    app.state.mcp_transport = None  # and a fake Ads MCP server here
 
     def _model_ready():
         if team.real and team.fake is not None:
@@ -457,6 +463,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "weekly_test_budget": round(facts.weekly_budget * facts.test_budget_share, 2),
             "constraints": facts.constraints,
             "fact_version": team.ws.facts.version,
+            "reads": team.account.read_sources() if team.real else None,
         }
 
     def _set_rules(body: Rules) -> int:
@@ -516,7 +523,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
                 raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
             if team.busy:
                 raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
-            account = use_real_account(team, granted[body.account_id], app.state.graph_transport)
+            account = use_real_account(team, granted[body.account_id], app.state.graph_transport,
+                                       app.state.mcp_transport)
         try:
             access.connect(team.ws, account, body.level, sim_day=_day())
         except ValueError as exc:
@@ -569,6 +577,19 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             return RedirectResponse("/#/settings?meta=failed", status_code=302)
         team.meta = {"token": token, "accounts": accounts}
         return RedirectResponse("/#/settings?meta=pick", status_code=302)
+
+    @app.get("/api/meta/mcp")
+    async def meta_mcp():
+        """What the Ads MCP offers this account, and which source answered each read."""
+        if not team.real:
+            raise HTTPException(409, "Connect a Meta ad account first")
+        from pgt.ads.ads_mcp import McpError
+
+        try:
+            tools = await asyncio.to_thread(team.account.mcp_tools)
+        except McpError as exc:
+            tools = {"error": str(exc)}
+        return {**tools, **team.account.read_sources()}
 
     @app.get("/api/dashboard")
     async def dashboard(days: int = 7):

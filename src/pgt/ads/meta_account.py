@@ -1,5 +1,8 @@
 """A real Meta ad account behind the same interface as the sandbox.
 
+Reads go through Meta's official Ads MCP server when it can answer them, and through the Graph
+API otherwise; `read_sources()` says which. Writes always go through the Graph API.
+
 PGT's "campaign" is a Meta ad set: that is where the daily budget, the learning phase and the
 ads live. Day 1 is the origin date; `day` counts the complete days since then, so today's partial
 numbers are never read as a finished day.
@@ -7,7 +10,8 @@ numbers are never read as a finished day.
 Writes follow the L2 rules for real accounts:
   - new ads are created PAUSED, inside an ad set that already exists; live ads are never edited
   - an ad can be paused, but never turned on: that step stays with the owner in Ads Manager
-  - a daily budget is changed only on an ad set that owns its daily budget (not CBO, not lifetime)
+  - a daily budget is changed only on an ad set that owns its daily budget (not CBO, not lifetime),
+    checked on the live ad set right before the write
 Approval and house rules are checked before the writer is called, by the Operator and the gate.
 """
 
@@ -22,6 +26,7 @@ from pathlib import Path
 
 from pgt.schemas.ads import AccountState, AdState, CampaignState, InsightRow, Status
 
+from .ads_mcp import ENTITIES_TOOL, McpError, McpReads, McpUnsupported
 from .graph import Graph, GraphError
 
 # Currencies Meta bills without minor units; every other currency uses cents.
@@ -55,6 +60,8 @@ class MetaAccount:
         today=_today,
         changes: list[dict] | None = None,
         on_write=None,
+        mcp=None,
+        currency: str | None = None,
     ) -> None:
         self._graph = graph
         self.account_id = account_id if account_id.startswith("act_") else f"act_{account_id}"
@@ -68,9 +75,13 @@ class MetaAccount:
         self._changes: list[dict] = deepcopy(changes or [])
         self._on_write = on_write  # called with each write PGT made, so the workspace keeps it
         self._state: AccountState | None = None
-        self._budget_owner: dict[str, str] = {}
         self._rows: dict[int, list[InsightRow]] = {}
-        self._currency: str | None = None
+        self._currency: str | None = currency or None
+        # Reads through the Ads MCP; None reads everything through the Graph API.
+        self._mcp = None if mcp is None else McpReads(mcp, self.account_id, self.result_action)
+        self._sources: dict[str, str] = {}
+        self._mcp_off: dict[str, str] = {}  # reads the MCP cannot answer, with the reason
+        self._mcp_notes: dict[str, str] = {}  # the last failure of a read worth retrying
 
     @classmethod
     def from_env(cls, graph: Graph, account_id: str, origin: date, **kw) -> MetaAccount:
@@ -109,6 +120,36 @@ class MetaAccount:
 
     # --- reads -----------------------------------------------------------------------------
 
+    def _read(self, name: str, via_mcp, via_graph) -> list[dict]:
+        """Read through the Ads MCP, or through the Graph API when the MCP cannot answer."""
+        if self._mcp is not None and name not in self._mcp_off:
+            try:
+                rows = via_mcp()
+                self._sources[name] = "mcp"
+                self._mcp_notes.pop(name, None)
+                return rows
+            except McpUnsupported as exc:
+                self._mcp_off[name] = str(exc)
+            except McpError as exc:
+                self._mcp_notes[name] = str(exc)
+        self._sources[name] = "graph"
+        return via_graph()
+
+    def read_sources(self) -> dict:
+        """Which source answered each read so far, and why any read used the Graph API."""
+        notes = {**self._mcp_notes, **self._mcp_off}
+        if self._mcp is None:
+            notes = {"all": "The Meta Ads MCP is turned off (META_ADS_MCP=0)"}
+        return {"mcp": self._mcp is not None, "reads": dict(self._sources), "notes": notes}
+
+    def mcp_tools(self) -> dict:
+        """The Ads MCP's tool names and the input schema PGT reads with, to check the mapping."""
+        if self._mcp is None:
+            raise McpUnsupported("The Meta Ads MCP is turned off (META_ADS_MCP=0)")
+        tools = self._mcp.tools()
+        entities = tools.get(ENTITIES_TOOL) or {}
+        return {"tools": sorted(tools), ENTITIES_TOOL: entities.get("inputSchema")}
+
     @property
     def _offset(self) -> int:
         return 1 if self.currency in _NO_MINOR_UNITS else 100
@@ -121,7 +162,7 @@ class MetaAccount:
         return self._currency
 
     def _money(self, minor) -> float:
-        return int(minor) / self._offset if minor not in (None, "", "0") else 0.0
+        return int(float(minor)) / self._offset if minor not in (None, "", "0") else 0.0
 
     def _results(self, actions) -> int:
         return int(sum(float(a.get("value", 0)) for a in actions or []
@@ -135,37 +176,39 @@ class MetaAccount:
     def _read_state(self) -> AccountState:
         filtering = [{"field": "effective_status", "operator": "NOT_IN",
                       "value": ["DELETED", "ARCHIVED"]}]
-        adsets = self._graph.rows(f"{self.account_id}/adsets", fields=_ADSET_FIELDS,
-                                  filtering=filtering)
+        gone = {"DELETED", "ARCHIVED"}
+        adsets = self._read(
+            "ad_sets", lambda: self._mcp.adsets(),
+            lambda: self._graph.rows(f"{self.account_id}/adsets", fields=_ADSET_FIELDS,
+                                     filtering=filtering))
+        adsets = [a for a in adsets if a.get("effective_status") not in gone]
         if self.adset_ids:
-            adsets = [a for a in adsets if a["id"] in self.adset_ids]
-        scope = {a["id"] for a in adsets}
-        ads = [a for a in self._graph.rows(f"{self.account_id}/ads", fields=_AD_FIELDS,
-                                           filtering=filtering)
-               if a.get("adset_id") in scope]
-        lifetime = {r["ad_id"]: r for r in self._graph.rows(
-            f"{self.account_id}/insights", level="ad", date_preset="maximum",
-            fields="ad_id,spend,actions")}
+            adsets = [a for a in adsets if str(a["id"]) in self.adset_ids]
+        scope = {str(a["id"]) for a in adsets}
+        ads = self._read(
+            "ads", lambda: self._mcp.ads(),
+            lambda: self._graph.rows(f"{self.account_id}/ads", fields=_AD_FIELDS,
+                                     filtering=filtering))
+        ads = [a for a in ads if str(a.get("adset_id")) in scope
+               and a.get("effective_status", a.get("status")) not in gone]
+        lifetime = {str(r["ad_id"]): r for r in self._read(
+            "lifetime", lambda: self._mcp.lifetime(),
+            lambda: self._graph.rows(f"{self.account_id}/insights", level="ad",
+                                     date_preset="maximum", fields="ad_id,spend,actions"))}
         campaigns = []
         for a in adsets:
-            parent = a.get("campaign") or {}
-            if a.get("daily_budget"):
-                owner, budget = "adset", a["daily_budget"]
-            elif parent.get("daily_budget"):
-                owner, budget = "campaign", parent["daily_budget"]
-            else:
-                owner, budget = "lifetime", 0
-            self._budget_owner[a["id"]] = owner
+            _, budget = _budget(a)
             learning = a.get("learning_stage_info") or {}
+            parent = a.get("campaign") if isinstance(a.get("campaign"), dict) else {}
             campaigns.append(CampaignState(
-                campaign_id=a["id"],
+                campaign_id=str(a["id"]),
                 name=a.get("name", a["id"]),
                 status=_status(a.get("effective_status")),
                 objective=parent.get("objective", ""),
                 daily_budget=self._money(budget),
                 in_learning=learning.get("status") == "LEARNING",
                 results_since_edit=int(learning.get("conversions") or 0),
-                last_budget_change_day=self._last_budget_change(a["id"]),
+                last_budget_change_day=self._last_budget_change(str(a["id"])),
                 test_id=None,
             ))
         return AccountState(
@@ -173,13 +216,13 @@ class MetaAccount:
             currency=self.currency,
             campaigns=campaigns,
             ads=[AdState(
-                ad_id=ad["id"],
-                campaign_id=ad["adset_id"],
+                ad_id=str(ad["id"]),
+                campaign_id=str(ad["adset_id"]),
                 name=ad.get("name", ad["id"]),
                 status="ACTIVE" if ad.get("status") == "ACTIVE" else "PAUSED",
                 created_day=self._day_of(_date(ad.get("created_time"))),
-                lifetime_spend=float(lifetime.get(ad["id"], {}).get("spend") or 0),
-                lifetime_results=self._results(lifetime.get(ad["id"], {}).get("actions")),
+                lifetime_spend=float(lifetime.get(str(ad["id"]), {}).get("spend") or 0),
+                lifetime_results=self._results(lifetime.get(str(ad["id"]), {}).get("actions")),
             ) for ad in ads],
         )
 
@@ -194,27 +237,27 @@ class MetaAccount:
         Meta's daily reach is not additive, so this frequency is a floor on the true one."""
         if end not in self._rows:
             scope = {c.campaign_id for c in self.state().campaigns}
-            raw = self._graph.rows(
-                f"{self.account_id}/insights", level="ad", time_increment=1,
-                fields=_INSIGHT_FIELDS,
-                time_range={"since": self.date_of(1).isoformat(),
-                            "until": self.date_of(end).isoformat()},
-            )
+            since, until = self.date_of(1).isoformat(), self.date_of(end).isoformat()
+            raw = self._read(
+                "daily", lambda: self._mcp.daily(since, until),
+                lambda: self._graph.rows(
+                    f"{self.account_id}/insights", level="ad", time_increment=1,
+                    fields=_INSIGHT_FIELDS, time_range={"since": since, "until": until}))
             rows, impressions, reach = [], {}, {}
-            for r in sorted(raw, key=lambda r: (r["date_start"], r["ad_id"])):
-                if r.get("adset_id") not in scope:
+            for r in sorted(raw, key=lambda r: (str(r["date_start"]), str(r["ad_id"]))):
+                if str(r.get("adset_id")) not in scope:
                     continue
-                ad_id = r["ad_id"]
+                ad_id = str(r["ad_id"])
                 shown, people = int(r.get("impressions") or 0), int(r.get("reach") or 0)
                 impressions[ad_id] = impressions.get(ad_id, 0) + shown
                 reach[ad_id] = reach.get(ad_id, 0) + people
                 spend = float(r.get("spend") or 0)
                 clicks = int(r.get("clicks") or 0)
                 results = self._results(r.get("actions"))
-                day = self._day_of(date.fromisoformat(r["date_start"]))
+                day = self._day_of(date.fromisoformat(str(r["date_start"])[:10]))
                 rows.append(InsightRow(
                     evidence_id=f"ev-d{day}-{ad_id}", day=day, ad_id=ad_id,
-                    campaign_id=r["adset_id"], spend=spend, impressions=shown, reach=people,
+                    campaign_id=str(r["adset_id"]), spend=spend, impressions=shown, reach=people,
                     clicks=clicks, results=results,
                     ctr=clicks / shown if shown else 0.0,
                     cost_per_result=round(spend / results, 4) if results else None,
@@ -265,7 +308,8 @@ class MetaWriter:
         campaign = account.state().campaign(campaign_id)
         if campaign is None:
             raise WriteRefused(f"Ad set {campaign_id} is not in the team's scope")
-        owner = account._budget_owner.get(campaign_id)
+        # Check the live ad set, whichever source the team read it from.
+        owner, _ = _budget(self._graph.get(campaign_id, fields=_ADSET_FIELDS))
         if owner == "campaign":
             raise WriteRefused("This ad set's budget is set on its campaign (Advantage campaign "
                                "budget). Change it in Ads Manager.")
@@ -324,6 +368,16 @@ class MetaWriter:
         self._record("ad_created", ad_id=ad["id"], campaign_id=campaign_id, name=name,
                      status="PAUSED", creative_id=creative.creative_id)
         return ad["id"]
+
+
+def _budget(adset: dict) -> tuple[str, object]:
+    """Who owns an ad set's daily budget ("adset", "campaign" or "lifetime"), and the budget."""
+    parent = adset.get("campaign") if isinstance(adset.get("campaign"), dict) else {}
+    if adset.get("daily_budget") not in (None, "", "0", 0):
+        return "adset", adset["daily_budget"]
+    if parent.get("daily_budget") not in (None, "", "0", 0):
+        return "campaign", parent["daily_budget"]
+    return "lifetime", 0
 
 
 def _status(effective: str | None) -> Status:

@@ -5,8 +5,8 @@ a password; it gets a one-time code back on its own callback URL, checks the `st
 swaps the code for a token. The token stays in memory and is never written to the workspace.
 
 Needs META_APP_ID, META_APP_SECRET and META_LOGIN_CONFIG_ID (a Login for Business configuration
-that asks for ads_read, plus ads_management for L2). Off on the public demo, which runs on the
-labelled sandbox instead.
+that asks for ads_read, ads_mcp_management for reads through the Ads MCP, and ads_management for
+L2). Off on the public demo, which runs on the labelled sandbox instead.
 """
 
 from __future__ import annotations

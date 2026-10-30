@@ -286,12 +286,15 @@ def test_budget_change_resplits_the_plan_and_says_what_reran(client):
 
 
 def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
+    from tests.unit.test_ads_mcp import FakeMcp
     from tests.unit.test_meta_account import TOKEN, FakeGraph
 
     _idle(client)
     team = client.app.state.team
     sandbox_ws, sandbox_day = team.ws, team.account.day
-    client.app.state.graph_transport = FakeGraph()
+    graph = FakeGraph()
+    client.app.state.graph_transport = graph
+    client.app.state.mcp_transport = FakeMcp(graph)
     team.meta = {"token": TOKEN, "accounts": [{"kind": "meta", "account_id": "act_42",
                                                "name": "Test", "currency": "USD"}]}
     with pytest.MonkeyPatch.context() as mp:
@@ -306,8 +309,14 @@ def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
     assert a["connection"]["account_id"] == "act_42" and a["level"] == 2
     assert a["connection"]["origin"] and "token" not in json.dumps(a)
     assert [c.campaign_id for c in team.account.state().campaigns] == ["111"]
+    reads = client.get("/api/access").json()["reads"]
+    assert reads["mcp"] and reads["reads"]["ad_sets"] == "mcp"
+    mcp = client.get("/api/meta/mcp").json()
+    assert "ads_get_ad_entities" in mcp["tools"] and mcp["ads_get_ad_entities"]["required"]
     # The offline stand-in only knows the sandbox, so it does not run on real data.
     assert client.post("/api/run/day").status_code == 409
 
     assert client.post("/api/access/disconnect").status_code == 200
     assert not team.real and team.ws is sandbox_ws and team.account.day == sandbox_day
+    assert client.get("/api/access").json()["reads"] is None
+    assert client.get("/api/meta/mcp").status_code == 409

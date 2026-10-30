@@ -57,6 +57,8 @@ class FakeGraph:
             return {"success": True}
         if path == "act_42":
             return {"currency": "USD"}
+        if path in {a["id"] for a in self.adsets}:  # the writer checks the live ad set
+            return next(a for a in self.adsets if a["id"] == path)
         if path == "act_42/adsets":
             return {"data": self.adsets}
         if path == "act_42/ads":

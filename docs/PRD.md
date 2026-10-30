@@ -371,7 +371,7 @@ We don't start from zero. Commodity parts come from libraries; we build only the
 | --- | --- | --- |
 | Model access | OpenAI Python SDK against Meta's Responses API | Documented by Meta; already working in the Day 0 smoke test |
 | Per-role agent loop (tool calls, retries, typed output) | **Reuse**: Pydantic AI or OpenAI Agents SDK, picked by the spike below | A standard problem; no reason to write it |
-| MCP client | Official MCP Python SDK, or the chosen library's MCP support | Standard |
+| MCP client | A small synchronous client for Meta's Ads MCP (JSON-RPC over streamable HTTP, `src/pgt/ads/ads_mcp.py`); arguments are built from the server's own tool schemas | Standard |
 | Storage, API, UI | SQLite, FastAPI + SSE, React + Vite | Standard |
 | Coordination (event log, artifacts, facts, staleness, context packs, policy gate, verification) | **Build**, about 1,000–1,500 lines | This is the product. No library models versioned deliverables with stale tracking across days of runs. |
 | Scheduler | **Build** a thin one; LangGraph is the fallback | LangGraph keeps state per graph run; ours spans many runs over days and is keyed to deliverables. We'd fight the model. |
@@ -473,6 +473,7 @@ The longer-term answer to "is it better?" is the acceptance suite in §11. It ru
 - A real account can run at L2 on a local install. The Operator creates new ads PAUSED in an existing ad set and the owner turns them on in Ads Manager; it may pause an ad; it changes a budget only on an ad set that owns its daily budget, after approval and the house rules. It never turns an ad on and never edits a live ad. Refusals and Meta errors go on the receipt; nothing is retried.
 - A real account gets its own workspace file, so sandbox history and real data never mix. The token stays in memory.
 - The public demo stays on the sandbox.
+- On a real account, reads (ad sets, ads, lifetime totals, daily ad insights) go through Meta's official Ads MCP server (`ads_get_ad_entities`) with the owner's login token. A read the MCP cannot answer in full (a missing argument or field, an error) is read from the Graph API instead, and Settings shows which source answered each read. Writes always go through the Graph API in code, under the L2 rules; a budget write first checks the live ad set on the Graph API. The MCP's own write tools are not used, so the L2 rules cannot be bypassed.
 - **Development tools.** The organizers confirmed that any coding tool is allowed (Claude Code, Codex, Cline, Copilot and similar) and does not need to be disclosed. Non-Meta models may be used alongside Meta's, but Meta's models must be a real part of what the project runs. Stage One checks this, and Meta tooling is 25% of the score. PGT meets this: every AI role runs on Meta models at runtime (§6). Codex and Claude Code are used only to write the code, never inside the product.
 
 **Open**
