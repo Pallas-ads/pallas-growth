@@ -100,6 +100,25 @@ def fitness_app_scenario(seed: int = 7, plant_injection: bool = False) -> Scenar
     )
 
 
+def fitness_app_drafts() -> list[dict]:
+    """Unpublished drafts staged in the sandbox's Ads Manager, in the shape Meta's Ads MCP returns
+    them under `ad_drafts`. Synthetic. The team reads them and never publishes or edits them."""
+    return [
+        {"id": "draft_cmp_1", "name": "New Year resolutions", "objective": "APP_PROMOTION",
+         "status": "DRAFT", "daily_budget": {"value": 25, "unit": "USD"},
+         "adsets": [{"id": "draft_set_1", "name": "US 25-44 · Advantage+ audience",
+                     "optimization_goal": "APP_INSTALLS",
+                     "targeting": {"geo_locations": {"countries": ["US"]},
+                                   "age_min": 25, "age_max": 44},
+                     "ads": [{"id": "draft_ad_1", "name": "Day 1 vs day 30", "status": "DRAFT",
+                              "headline": "Thirty days, one habit"},
+                             {"id": "draft_ad_2", "name": "Resolution streak", "status": "DRAFT",
+                              "headline": "Keep the streak past January"}]}]},
+        {"id": "draft_ad_3", "level": "AD", "name": "Testimonial v2", "status": "DRAFT",
+         "campaign_id": "cmp_2", "headline": "Members who kept going"},
+    ]
+
+
 def fitness_app_facts() -> SharedFacts:
     return SharedFacts(
         product="Pallas Fit (synthetic demo app): 10-minute home workouts with daily streaks",

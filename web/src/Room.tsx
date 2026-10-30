@@ -194,7 +194,7 @@ export default function Room({ items, where, busy, error, route, sidebar, mode }
                stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
              }}>
           <div className="scroll-in">
-            {shown.length === 0 && <div className="empty">{tab === "mentions" ? "Nobody has mentioned you yet." : "The team is setting up the demo week."}</div>}
+            {shown.length === 0 && <div className="empty">{tab === "mentions" ? "Nobody has mentioned you yet." : busy === "Setting up the demo week" ? "The team is setting up the demo week." : "No messages yet. The team starts once an ad account is connected."}</div>}
             {shown.map((it) => {
               if (it.kind === "day") return <div className="daydiv" key={`d-${it.id}`}>{it.label}</div>;
               if (it.kind === "fold") return <FoldRow key={`f-${it.id}`} f={it} open={openFolds.has(it.id)} onToggle={() => toggle(it.id)} />;

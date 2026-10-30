@@ -240,10 +240,16 @@ MAX_UPLOAD = 5 * 1024 * 1024
 
 
 def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | None = 7) -> FastAPI:
+    """With `seed_days` the sandbox starts with that many simulated days already run. Without, the
+    team starts cold: no history, and the sandbox account appears when the owner connects it."""
+    from pgt.sandbox import SandboxAccount, fitness_app_facts, fitness_app_scenario
+
     @asynccontextmanager
     async def lifespan(_app):
         if seed_days and not team.ws.events.list("loop.started"):
             team.run("Setting up the demo week", seed(team, seed_days))
+        elif not seed_days and team.ws.facts.version == 0:
+            team.ws.facts.set(fitness_app_facts(), "user")
         yield
         for task in list(team.tasks):
             task.cancel()
@@ -406,7 +412,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         from pgt.loops.daily import run_daily_check
 
         if team.account is None:
-            raise HTTPException(409, "The demo week is still being set up")
+            raise HTTPException(409, "The demo week is still being set up" if seed_days
+                                else "Connect an ad account first")
         _model_ready()
 
         async def day():
@@ -430,7 +437,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         from pgt.loops.weekly import plan_week
 
         if team.account is None:
-            raise HTTPException(409, "The demo week is still being set up")
+            raise HTTPException(409, "The demo week is still being set up" if seed_days
+                                else "Connect an ad account first")
         _model_ready()
         if not access.can_propose(team.ws):
             raise HTTPException(409, "The team is set to L0 Observe, so it does not plan tests. "
@@ -481,14 +489,15 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "reads": team.account.read_sources() if team.real else None,
         }
 
-    def _set_rules(body: Rules) -> int:
+    def _set_rules(body: Rules, setup: bool = False) -> int:
         if team.busy:
             raise HTTPException(409, f"The team is busy: {team.busy}. Change the rules after.")
         facts = team.ws.facts.current()
         rules = _rules(facts.house_rules, body)
         if rules == facts.house_rules:
             return team.ws.facts.version
-        return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user")
+        return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user",
+                                 setup=setup)
 
     def _refresh(before: int) -> bool:
         """After the owner changed a fact, redo the stale work that needs no model."""
@@ -523,6 +532,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
                 raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
             leave_real_account(team)
             account = dict(access.SANDBOX)
+            if team.account is None and not seed_days:
+                team.account = SandboxAccount(fitness_app_scenario())
         else:
             reason = meta_login.unavailable(team.public)
             if reason:
@@ -541,15 +552,33 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             access.connect(team.ws, account, body.level, sim_day=_day())
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
-        if body.rules and not cold:  # a first connect already started with these rules
+        # A real account is read on every connect; the sandbox only before the team has run.
+        kick = team.real or (team.account is not None
+                             and not team.ws.events.list("loop.started"))
+        stale = None
+        if body.rules and kick and not team.real:
+            _set_rules(body.rules, setup=True)  # the sandbox before its first run: nothing stale
+        elif body.rules and not cold:  # a first connect already started with these rules
             before = team.ws.facts.version
             _set_rules(body.rules)
-            _refresh(before)
-        if team.real:
+            if not kick:
+                _refresh(before)
+            elif team.ws.facts.version != before:  # one task: refresh, then read the account
+                from pgt.loops.refresh import refresh
+
+                changed = team.ws.events.list("fact.changed")[-1].payload["changed"]
+                stale = refresh(team.ws, team.account, changed)
+        if kick:
             from pgt.loops.kickoff import kickoff
 
             name = account.get("name") or account["account_id"]
-            team.run("Reading the account", kickoff(team.ws, team.account, name))
+
+            async def read():
+                if stale is not None:
+                    await stale
+                await kickoff(team.ws, team.account, name)
+
+            team.run("Reading the account", read())
         return {"ok": True}
 
     @app.post("/api/access/level")
@@ -610,12 +639,12 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     @app.get("/api/drafts")
     async def drafts():
-        """Ads Manager drafts on the connected real account, read only. The sandbox has none."""
-        if not team.real:
-            return {"available": False, "reason": "The sandbox has no Ads Manager drafts",
-                    "drafts": []}
+        """Ads Manager drafts on the connected account, read only: a real account's through the
+        Ads MCP, or the sandbox's synthetic ones."""
         from pgt.ads.ads_mcp import McpError, draft_counts
 
+        if team.account is None:
+            return {"available": False, "reason": "Connect an ad account first", "drafts": []}
         try:
             found = await asyncio.to_thread(team.account.drafts)
         except McpError as exc:

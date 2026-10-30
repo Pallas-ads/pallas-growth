@@ -1,4 +1,4 @@
-"""The Growth Lead's first message on a newly connected real account.
+"""The Growth Lead's first message on a newly connected account, real or sandbox.
 
 It says what the team read and what comes next. Plain code: no model is called, nothing is
 written to the account, and a read that fails is named instead of stopping the message."""
@@ -33,18 +33,25 @@ def _join(parts: list[str]) -> str:
 
 
 def kickoff_text(name: str, state, drafts: list[dict] | None, draft_error: str | None,
-                 reads: dict[str, str], scoped: bool) -> str:
-    lines = [f"I read {name} through {_source(reads)}. Nothing was changed."]
+                 reads: dict[str, str] | None, scoped: bool) -> str:
+    """`reads` names the source of each read on a real account; None means the sandbox, whose
+    campaigns hold ads directly (a real account's ad sets stand in for them)."""
+    if reads is None:
+        lines = [f"I read {name}, a synthetic account. Nothing was changed."]
+    else:
+        lines = [f"I read {name} through {_source(reads)}. Nothing was changed."]
+    unit = "campaign" if reads is None else "ad set"
     live = bool(state and state.campaigns)
     if state is not None:
         if live:
             spent = sum(a.lifetime_spend for a in state.ads)
             where = " in the scope you set" if scoped else ""
-            lines.append(f"Live{where}: {_plural(len(state.campaigns), 'ad set')} with "
-                         f"{_plural(len(state.ads), 'ad')}, {_money(spent, state.currency)} "
-                         "spent so far.")
+            money = (f"{_money(spent, state.currency)} spent so far" if spent
+                     else "nothing spent yet")
+            lines.append(f"Live{where}: {_plural(len(state.campaigns), unit)} with "
+                         f"{_plural(len(state.ads), 'ad')}, {money}.")
         else:
-            lines.append("Nothing is live: no active or paused ad sets.")
+            lines.append(f"Nothing is live: no active or paused {unit}s.")
     counts = draft_counts(drafts or [])
     if draft_error:
         err = draft_error.strip()
@@ -84,7 +91,8 @@ async def kickoff(ws: Workspace, account, name: str) -> str:
         drafts = await asyncio.to_thread(account.drafts)
     except McpError as exc:
         draft_error = str(exc)
-    text = kickoff_text(name, state, drafts, draft_error, account.read_sources()["reads"],
-                        bool(account.adset_ids))
+    reads = account.read_sources()["reads"] if hasattr(account, "read_sources") else None
+    text = kickoff_text(name, state, drafts, draft_error, reads,
+                        bool(getattr(account, "adset_ids", None)))
     ws.events.append("message.posted", "growth_lead", {"text": text}, sim_day=account.day)
     return text

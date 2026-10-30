@@ -2,7 +2,7 @@
 
 pgt simulate --days 7 [--live] [--provider meta|mixed] [--db path]
 pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/media]
-pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5] [--public]
+pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5] [--public] [--cold]
           [--ssl-certfile cert.pem --ssl-keyfile key.pem]
 
 --provider mixed runs the text roles on Muse Spark (open weights) on Baseten and keeps the
@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None) -> None:
         "--public", action="store_true", default=bool(os.environ.get("PGT_PUBLIC")),
         help="Hosted demo: sandbox only, no real Meta login (also PGT_PUBLIC=1)",
     )
+    serve.add_argument("--cold", action="store_true",
+                       help="Start the team cold: no demo week, the sandbox appears on connect")
     serve.add_argument("--ssl-certfile", default=None,
                        help="Serve over HTTPS, as Meta login needs (also PGT_TLS_CERT)")
     serve.add_argument("--ssl-keyfile", default=None, help="Key for --ssl-certfile "
@@ -134,7 +136,7 @@ def _serve(args) -> None:
     # Meta matches the login callback exactly, so open the address the callback was saved with.
     host = "localhost" if args.host in {"127.0.0.1", "localhost"} else args.host
     print(f"Workspace {db}. Open {'https' if cert else 'http'}://{host}:{args.port}")
-    uvicorn.run(create_app(team, args.web), host=args.host, port=args.port, log_level="warning",
+    uvicorn.run(create_app(team, args.web, seed_days=0 if args.cold else 7), host=args.host, port=args.port, log_level="warning",
                 ssl_certfile=cert, ssl_keyfile=key)
 
 

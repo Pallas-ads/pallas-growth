@@ -340,6 +340,39 @@ def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
     assert client.get("/api/meta/mcp").status_code == 409
 
 
+def test_a_cold_team_starts_with_an_empty_room_and_reads_the_sandbox_on_connect(tmp_path):
+    team = offline_team(str(tmp_path / "w.db"), str(tmp_path / "media"))
+    with TestClient(create_app(team, seed_days=0)) as c:
+        assert c.get("/api/room").json()["items"] == []
+        assert not c.get("/api/dashboard").json()["waiting"]
+        assert c.get("/api/drafts").json()["available"] is False
+        assert c.post("/api/run/day").json()["detail"] == "Connect an ad account first"
+        r = c.post("/api/access/connect",
+                   json={"kind": "sandbox", "level": 1, "rules": {"daily_budget_cap": 80}})
+        assert r.status_code == 200, r.text
+        _idle(c)
+        room = c.get("/api/room").json()["items"]
+        assert [i["kind"] for i in room] == ["day", "msg"]  # setup rules are not a change
+        assert room[1]["who"]["actor"] == "growth_lead"
+        assert room[1]["text"].startswith("I read Pallas Fit sandbox, a synthetic account.")
+        assert team.ws.facts.current().house_rules.daily_budget_cap == 80
+        d = c.get("/api/drafts").json()
+        assert d["available"] and d["counts"] == {"campaign": 1, "ad set": 1, "ad": 3}
+        assert c.get("/api/dashboard").json()["waiting"]
+        assert c.post("/api/run/day").status_code == 200
+        _idle(c)
+        assert c.get("/api/dashboard").json()["ready"]
+    team.ws.close()
+
+
+def test_the_seeded_sandbox_shows_its_drafts_without_a_kickoff(client):
+    d = client.get("/api/drafts").json()
+    assert d["available"] and d["drafts"][0]["name"] == "New Year resolutions"
+    client.post("/api/access/connect", json={"kind": "sandbox", "level": 1})
+    _idle(client)
+    texts = [i.get("text", "") for i in client.get("/api/room").json()["items"]]
+    assert not any(t.startswith("I read Pallas Fit sandbox") for t in texts)
+
 def test_the_page_is_never_cached_but_assets_are_served(tmp_path):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)

@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from pgt.schemas.ads import AccountState, AdState, InsightRow, Status
 
-from .scenario import AdPerformance, Scenario
+from .scenario import AdPerformance, Scenario, fitness_app_drafts
 
 
 class SandboxAccount:
@@ -128,6 +128,12 @@ class SandboxAccount:
              and (selected is None or row.ad_id in selected)),
             key=lambda row: (row.day, row.ad_id),
         ))
+
+    def drafts(self) -> list[dict]:
+        """The synthetic Ads Manager drafts, normalized the same way as a real account's."""
+        from pgt.ads.ads_mcp import draft_node
+
+        return [draft_node(d) for d in fitness_app_drafts()]
 
     def changes(self) -> list[dict]:
         """Every write the Operator made, in order, each with the sim day it happened on."""
