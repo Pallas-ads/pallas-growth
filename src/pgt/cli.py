@@ -102,8 +102,11 @@ def _serve(args) -> None:
     from datetime import datetime
 
     import uvicorn
+    from dotenv import load_dotenv
 
     from pgt.api.app import create_app, live_team, offline_team
+
+    load_dotenv()  # Meta login settings; offline runs still never call a model
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = Path("runs/web") / stamp
