@@ -7,6 +7,10 @@ before it writes anything.
   L0 Observe               reads results and writes findings; asks for nothing
   L1 Propose               drafts plans and change sets; the owner applies them in Ads Manager
   L2 Apply after approval  the Operator writes exactly what was approved; new ads start paused
+
+On a real Meta account L2 is narrower still: new ads are created paused for the owner to turn on
+in Ads Manager, an ad can be paused but never turned on, and a budget changes only after approval
+and the house rules. See pgt.ads.meta_account.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ LEVELS = [
      "scopes": ["ads_read"]},
     {"level": APPLY, "code": "L2", "name": "Apply after approval",
      "text": "The Operator writes exactly what you approved, nothing else. New ads are always "
-             "created paused.",
+             "created paused; you turn them on in Ads Manager.",
      "scopes": ["ads_read", "ads_management"]},
 ]
 
@@ -76,9 +80,6 @@ def set_level(ws: Workspace, n: int, actor: str = "user", sim_day: int | None = 
 def connect(ws: Workspace, account: dict, n: int, actor: str = "user",
             sim_day: int | None = None) -> None:
     _owner_only(ws, actor, "connect an ad account")
-    if account.get("kind") == "meta" and n > PROPOSE:
-        # This build only writes to the sandbox; a real account is connected read-only.
-        raise ValueError("A real Meta ad account can be connected at L0 or L1 in this build")
     with ws.events._transaction():
         ws.events.append("account.connected", actor, dict(account), sim_day=sim_day)
         set_level(ws, n, actor, sim_day)

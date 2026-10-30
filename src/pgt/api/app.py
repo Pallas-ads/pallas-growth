@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -43,6 +44,13 @@ class Team:
     tasks: set = field(default_factory=set)
     public: bool = False  # the hosted demo: sandbox only, no real Meta login
     meta: dict = field(default_factory=dict)  # login state, token and granted accounts; memory only
+    db: str = ":memory:"  # the sandbox workspace; a real account gets its own file next to it
+    model_name: str = ""
+    parked: tuple | None = None  # the sandbox (ws, meter, account) while a real account is in use
+
+    @property
+    def real(self) -> bool:
+        return self.parked is not None
 
     def run(self, label: str, coro) -> None:
         if self.busy:
@@ -81,7 +89,7 @@ def offline_team(db: str, media_dir: str) -> Team:
     model, fake = offline_model("muse-spark-1.3")
     ws = Workspace(db)
     return Team(ws, model, MediaClient(fake.client()), media_dir, fake=fake,
-                meter=CostMeter(ws.events))
+                meter=CostMeter(ws.events), db=db)
 
 
 def live_team(
@@ -106,7 +114,62 @@ def live_team(
         model = mixed(model, chat_model(baseten_client(), effort=effort))
     ws = Workspace(db)
     return Team(ws, model, MediaClient(client), media_dir, meter=CostMeter(ws.events, total=cap),
-                mode="mixed" if provider == "mixed" else "live")
+                mode="mixed" if provider == "mixed" else "live", db=db, model_name=model_name)
+
+
+def _real_db(team: Team, account_id: str) -> str:
+    if team.db == ":memory:":
+        return ":memory:"
+    return str(Path(team.db).with_name(f"meta-{account_id}.db"))
+
+
+def use_real_account(team: Team, account: dict, transport=None) -> dict:
+    """Move the team onto a real ad account, in a workspace of its own.
+
+    The sandbox's history stays in its own file and comes back on disconnect. The token stays in
+    memory; the workspace keeps only the account id, the origin date and PGT's own writes."""
+    from pgt.ads.graph import Graph
+    from pgt.ads.meta_account import MetaAccount
+    from pgt.harness.policy import CostMeter
+
+    if team.model_name.endswith("-contributor"):
+        raise HTTPException(409, "Real ad data never goes to a -contributor model")
+    token = team.meta.get("token")
+    if not token:
+        raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
+    if team.real:
+        leave_real_account(team)
+    ws = Workspace(_real_db(team, account["account_id"]))
+    if ws.facts.version == 0:
+        # Start from the sandbox's facts; the owner corrects them in Settings.
+        ws.facts.set(team.ws.facts.current(), "user")
+    earlier = [e for e in ws.events.list("account.connected")
+               if e.payload.get("account_id") == account["account_id"] and e.payload.get("origin")]
+    lookback = int(os.environ.get("META_LOOKBACK_DAYS", "7"))
+    origin = (date.fromisoformat(earlier[-1].payload["origin"]) if earlier
+              else date.today() - timedelta(days=lookback))
+    meter = team.meter
+    total = None if meter is None or meter.total is None else meter.remaining()
+    team.parked = (team.ws, team.meter, team.account)
+    team.ws, team.meter = ws, CostMeter(ws.events, total=total)
+    team.account = MetaAccount.from_env(
+        Graph(token, transport), account["account_id"], origin,
+        changes=[e.payload for e in ws.events.list("meta.write")],
+        on_write=lambda record: ws.events.append("meta.write", "operator", record,
+                                                 sim_day=record["day"]),
+    )
+    return {**account, "origin": origin.isoformat()}
+
+
+def leave_real_account(team: Team) -> None:
+    """Back to the sandbox. Spend on the real account still counts against the sandbox's cap."""
+    if not team.real:
+        return
+    spent = team.meter.spent() if team.meter is not None else 0.0
+    team.ws, team.meter, team.account = team.parked
+    team.parked = None
+    if team.meter is not None and team.meter.total is not None:
+        team.meter.total = max(team.meter.spent(), team.meter.total - spent)
 
 
 class Message(BaseModel):
@@ -167,6 +230,12 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     app = FastAPI(title="Pallas Growth Team", lifespan=lifespan)
     app.state.team = team
+    app.state.graph_transport = None  # tests put a fake Graph here
+
+    def _model_ready():
+        if team.real and team.fake is not None:
+            raise HTTPException(409, "A real ad account needs the live team (pgt serve --live). "
+                                     "The offline stand-in only knows the sandbox.")
 
     def _record(key: str):
         record = team.ws.artifacts.latest(key)
@@ -317,6 +386,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         if team.account is None:
             raise HTTPException(409, "The demo week is still being set up")
+        _model_ready()
 
         async def day():
             team.account.advance_day()
@@ -340,6 +410,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         if team.account is None:
             raise HTTPException(409, "The demo week is still being set up")
+        _model_ready()
         if not access.can_propose(team.ws):
             raise HTTPException(409, "The team is set to L0 Observe, so it does not plan tests. "
                                      "Raise the level in Settings first.")
@@ -432,6 +503,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
     @app.post("/api/access/connect")
     async def connect(body: Connect):
         if body.kind == "sandbox":
+            if team.busy:
+                raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
+            leave_real_account(team)
             account = dict(access.SANDBOX)
         else:
             reason = meta_login.unavailable(team.public)
@@ -440,7 +514,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             granted = {a["account_id"]: a for a in team.meta.get("accounts", [])}
             if body.account_id not in granted:
                 raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
-            account = granted[body.account_id]
+            if team.busy:
+                raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
+            account = use_real_account(team, granted[body.account_id], app.state.graph_transport)
         try:
             access.connect(team.ws, account, body.level, sim_day=_day())
         except ValueError as exc:
@@ -453,15 +529,15 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     @app.post("/api/access/level")
     async def set_level(body: Level):
-        current = access.connection(team.ws)
-        if current and current.get("kind") == "meta" and body.level > access.PROPOSE:
-            raise HTTPException(409, "A real Meta ad account is read-only in this build (L0 or L1)")
         access.set_level(team.ws, body.level, sim_day=_day())
         return {"ok": True, "level": body.level}
 
     @app.post("/api/access/disconnect")
     async def disconnect():
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}. Disconnect after.")
         access.disconnect(team.ws, sim_day=_day())
+        leave_real_account(team)
         team.meta.clear()
         return {"ok": True}
 

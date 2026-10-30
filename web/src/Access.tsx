@@ -40,7 +40,7 @@ export function Connection({ a, onChange }: { a: AccessData; onChange: () => voi
               <span className="okdot"><i />Connected</span>
             </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
-              {real ? "Meta ad account, read-only in this build." : "Sandbox connection, synthetic data."}{" "}
+              {real ? "Meta ad account. Data stays on this machine." : "Sandbox connection, synthetic data."}{" "}
               Connected by {c.by === "user" ? OWNER : c.by} on {date(c.ts)} · {c.currency} · {c.timezone}
             </div>
           </div>
@@ -68,13 +68,12 @@ export function Connection({ a, onChange }: { a: AccessData; onChange: () => voi
         </div>
         <div className="lvls">
           {a.levels.map((l) => {
-            const locked = real && l.level > 1;
             return (
               <button key={l.level} className={"lvl" + (a.level === l.level ? " on" : "")}
-                      disabled={busy || locked || a.level === l.level} aria-pressed={a.level === l.level}
+                      disabled={busy || a.level === l.level} aria-pressed={a.level === l.level}
                       onClick={() => act(() => api.setLevel(l.level))}>
                 <div className="top"><span className="rd" /><span className="code">{l.code}</span><span className="n">{l.name}</span></div>
-                <div className="d">{locked ? "Not available for a real account in this build." : l.text}</div>
+                <div className="d">{levelText(l, real)}</div>
                 <div className="sc">{l.scopes.join(", ")}</div>
               </button>
             );
@@ -319,16 +318,15 @@ export function Wizard({ a, start, onClose, onDone }: {
             <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>You can raise or lower this later in Settings. Every level keeps you as the only one who approves.</div></div>
           <div className="col" style={{ gap: 8 }}>
             {a.levels.map((l) => {
-              const off = kind === "meta" && l.level > 1;
               const tag = kind === "meta" ? (l.level === 1 ? "Recommended to start" : null)
                 : (l.level === 2 ? "Sandbox default" : null);
               return (
-                <button key={l.level} className={"pick" + (level === l.level ? " on" : "") + (off ? " dis" : "")}
-                        disabled={off} onClick={() => setLevel(l.level)}>
+                <button key={l.level} className={"pick" + (level === l.level ? " on" : "")}
+                        onClick={() => setLevel(l.level)}>
                   <span className="rd" /><div>
                     <div className="n"><span className="mono" style={{ fontSize: 11, color: level === l.level ? "var(--blue)" : "var(--muted)" }}>{l.code}</span> {l.name}
                       {tag && <span className="lbl review">{tag}</span>}</div>
-                    <div className="d">{off ? "Not available for a real account in this build: the team only writes to the sandbox." : l.text}
+                    <div className="d">{levelText(l, kind === "meta")}
                       <span className="sc">{l.scopes.join(", ")}</span></div></div>
                 </button>
               );
@@ -367,4 +365,11 @@ export function Wizard({ a, start, onClose, onDone }: {
       </div>
     </div>
   );
+}
+
+const REAL_L2 = "New ads are created paused for you to turn on in Ads Manager. Pauses and budget "
+  + "changes apply after your approval, within the house rules. The team never turns an ad on.";
+
+function levelText(l: { level: number; text: string }, real: boolean): string {
+  return real && l.level === 2 ? REAL_L2 : l.text;
 }
