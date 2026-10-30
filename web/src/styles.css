@@ -425,7 +425,7 @@ button { font: inherit; cursor: pointer; }
 .rules > div { padding: 8px 0; border-bottom: 1px solid var(--rule); }
 .rules .r { color: var(--ink); }
 .rules .r small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
-.rules .v { text-align: right; font: 500 12px var(--mono); color: var(--ink); align-self: center; }
+.rules .v { display: flex; align-items: center; justify-content: flex-end; text-align: right; font: 500 12px var(--mono); color: var(--ink); }
 .field { display: inline-flex; align-items: baseline; gap: 2px; min-width: 64px; padding: 4px 8px; border: 1px solid var(--rule-strong); border-radius: 2px; background: var(--surface); font: 500 12px var(--mono); }
 .field:focus-within { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
 .field input { border: 0; outline: 0; background: transparent; font: inherit; color: var(--ink); width: 5ch; text-align: right; padding: 0; }
