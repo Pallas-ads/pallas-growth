@@ -159,9 +159,19 @@ _ARG_NAMES = {
     "filtering": ("filtering", "filters"),
     "limit": ("limit",),
 }
-_ROW_KEYS = ("data", "entities", "results", "rows", "items")
+_ROW_KEYS = ("ad_entities", "data", "entities", "results", "rows", "items")
 _ALIASES = {"adset_id": ("ad_set_id",), "date_start": ("date", "day_start"),
-            "effective_status": ("status",)}
+            "effective_status": ("status",), "spend": ("amount_spent",)}
+
+
+def _decoded(value):
+    """Some replies carry their rows as a JSON string."""
+    if isinstance(value, str) and value.lstrip().startswith("["):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
 
 
 def _norm(word: str) -> str:
@@ -175,7 +185,7 @@ class McpReads:
 
     def __init__(self, mcp: AdsMcp, account_id: str, result_action: str) -> None:
         self._mcp = mcp
-        self.account_id = account_id
+        self.account_id = account_id.removeprefix("act_")  # the MCP lists accounts without it
         self._result_action = result_action
 
     def tools(self) -> dict[str, dict]:
@@ -220,15 +230,18 @@ class McpReads:
                 else json.dumps(value)
         if isinstance(value, dict) and kind == "string":
             return json.dumps(value)
+        if isinstance(value, int) and kind == "string":
+            return str(value)
         return value
 
     def _rows(self, args: dict) -> list[dict]:
         payload = self._mcp.call(ENTITIES_TOOL, args)
         if isinstance(payload, dict):
-            found = next((payload[k] for k in _ROW_KEYS if isinstance(payload.get(k), list)),
+            values = {k: _decoded(v) for k, v in payload.items()}
+            found = next((values[k] for k in _ROW_KEYS if isinstance(values.get(k), list)),
                          None)
             if found is None:
-                found = next((v for v in payload.values() if isinstance(v, list)), None)
+                found = next((v for v in values.values() if isinstance(v, list)), None)
             payload = found
         if not isinstance(payload, list) or not all(isinstance(r, dict) for r in payload):
             raise McpError(f"{ENTITIES_TOOL} replied in a shape PGT does not read")
@@ -242,6 +255,9 @@ class McpReads:
                 inner = inner["data"][0] if inner["data"] else {}
             if isinstance(inner, dict):
                 row = {**inner, **row}
+        for key, value in row.items():  # a metric may come as {"value": ..., "unit": ...}
+            if isinstance(value, dict) and "value" in value:
+                row[key] = value["value"]
         for key, others in _ALIASES.items():
             found = next((o for o in others if o in row), None)
             if key not in row and found:
