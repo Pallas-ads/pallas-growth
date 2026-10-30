@@ -1,7 +1,8 @@
 // Settings: the business facts the team works from, what the models cost, and the controls
 // that move the simulated week forward.
 import { Fragment, useState, type ReactNode } from "react";
-import { api, money, useData } from "./api";
+import { api, money, useData, type SettingsData } from "./api";
+import { Av } from "./ui";
 
 function rows(obj: Record<string, unknown>): [string, string][] {
   return Object.entries(obj).flatMap(([k, v]): [string, string][] => {
@@ -29,7 +30,9 @@ export default function Settings({ tick, busy, sidebar }: { tick: number; busy: 
         <section className="section" style={{ maxWidth: 640 }}>
           <div className="h2">Simulation</div>
           <div className="muted" style={{ fontSize: 12.5 }}>
-            The account is a synthetic sandbox. Each step runs the team on the {data?.offline ? "offline model, at no cost" : "configured model"}; nothing reaches a real ad account.
+            The account is a synthetic sandbox. {data?.offline
+              ? "Each step runs the team on an offline stand-in that answers in the same shape as Muse, at no cost."
+              : `Each step calls the real models and is charged at list price, up to the $${data?.cap ?? ""} cap.`} Nothing reaches a real ad account.
           </div>
           <div className="row" style={{ gap: 8, marginTop: 4 }}>
             <button className="btn ink" disabled={!!busy} onClick={() => run(api.runDay)}>Run the next day</button>
@@ -40,14 +43,7 @@ export default function Settings({ tick, busy, sidebar }: { tick: number; busy: 
         </section>
         {data && (
           <>
-            <section className="section" style={{ maxWidth: 640 }}>
-              <div className="h2">Model use</div>
-              <dl className="kv">
-                <dt>Model calls</dt><dd>{data.model_calls}</dd>
-                <dt>Tokens</dt><dd>{data.tokens.toLocaleString("en-US")}</dd>
-                <dt>Cost{data.offline ? " (offline, priced as if live)" : ""}</dt><dd>${data.cost.toFixed(4)}</dd>
-              </dl>
-            </section>
+            <Usage data={data} />
             <section className="section" style={{ maxWidth: 820 }}>
               <div className="h2">Business facts · version {data.fact_version}</div>
               <dl className="kv facts">
@@ -58,5 +54,52 @@ export default function Settings({ tick, busy, sidebar }: { tick: number; busy: 
         )}
       </main>
     </div>
+  );
+}
+
+const MODE_TEXT = {
+  offline: "Offline stand-in. No model is called; costs are what the same tokens would cost at list price.",
+  live: "Live on the Meta API: Muse Spark for every text role, Muse Image and SAM 3.1 for creative.",
+  mixed: "Live, mixed: text roles on Muse Spark open weights on Baseten; web search, Muse Image and SAM 3.1 on the Meta API.",
+};
+
+function Usage({ data }: { data: SettingsData }) {
+  const used = data.cap ? Math.min(data.cost / data.cap, 1) : 0;
+  return (
+    <section className="section" style={{ maxWidth: 820 }}>
+      <div className="h2">Models and spend</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>{MODE_TEXT[data.mode]}</div>
+      {data.cap != null && (
+        <div style={{ maxWidth: 420 }}>
+          <div className="row mono" style={{ justifyContent: "space-between", fontSize: 11.5 }}>
+            <span>${data.cost.toFixed(2)} of ${data.cap} spend cap</span>
+            <span className="faint">${(data.remaining ?? 0).toFixed(2)} left</span>
+          </div>
+          <div className="capbar"><i style={{ width: `${used * 100}%` }} /></div>
+        </div>
+      )}
+      <table className="use">
+        <thead><tr><th>Role</th><th>Model</th><th className="n">Calls</th><th className="n">Tokens</th>
+          <th className="n">Time</th><th className="n">Cost</th></tr></thead>
+        <tbody>
+          {data.usage.map((u) => (
+            <tr key={u.who.actor}>
+              <td><div className="row" style={{ gap: 8 }}><Av who={u.who} size="sm" /><span>{u.who.name}</span></div></td>
+              <td>{u.models.map((m) => (
+                <div key={m.model}><span className="mono" style={{ fontSize: 12 }}>{m.model.replace(/^meta-models\//, "")}</span>
+                  <div className="sub">{data.offline ? "offline stand-in" : m.provider} · {m.calls} {m.calls === 1 ? "call" : "calls"}</div></div>
+              ))}</td>
+              <td className="n">{u.calls}{u.failed ? <div className="sub">{u.failed} failed</div> : null}</td>
+              <td className="n">{u.tokens.toLocaleString("en-US")}{u.searches ? <div className="sub">{u.searches} searches</div> : null}</td>
+              <td className="n">{u.seconds}s</td>
+              <td className="n">${u.cost.toFixed(4)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot><tr><td>All roles</td><td /><td className="n">{data.model_calls}</td>
+          <td className="n">{data.tokens.toLocaleString("en-US")}</td><td />
+          <td className="n">${data.cost.toFixed(4)}</td></tr></tfoot>
+      </table>
+    </section>
   );
 }

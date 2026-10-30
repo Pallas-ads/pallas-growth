@@ -1,7 +1,7 @@
 // 4c A deliverable under Deliverables. The breadcrumb says where it lives; the right column
 // carries its discussion and links back to the room thread. Approving binds to this version.
 import { useState, type ReactNode } from "react";
-import { api, clock, money, when, type Detail as D, type Evidence, type Image } from "./api";
+import { api, clock, modelLabel, money, when, type Detail as D, type Evidence, type Image, type Mode } from "./api";
 import Composer from "./Composer";
 import { TABS } from "./Deliverables";
 import { go } from "./route";
@@ -221,8 +221,16 @@ function Discussion({ d }: { d: D }) {
   );
 }
 
-export default function Detail({ d, error, sidebar, onChange }: {
-  d: D | null; error: string | null; sidebar: ReactNode; onChange: () => void;
+function madeWith(d: D, mode?: Mode): string {
+  const t = d.made_with;
+  if (!t) return "";
+  const names = modelLabel(t.models.map((m) => m.model), mode);
+  const calls = `${t.calls} ${t.calls === 1 ? "call" : "calls"}`;
+  return `made with ${names} · ${calls} · $${t.cost.toFixed(3)}`;
+}
+
+export default function Detail({ d, error, sidebar, onChange, mode }: {
+  d: D | null; error: string | null; sidebar: ReactNode; onChange: () => void; mode?: Mode;
 }) {
   if (!d) {
     return (
@@ -250,6 +258,8 @@ export default function Detail({ d, error, sidebar, onChange }: {
           <div className="row" style={{ gap: 8 }}>
             <Lbl status={d.status} label={d.status_label} />
             <span className="mono muted" style={{ fontSize: 11 }}>from {d.from.name} · {when(d.updated, d.sim_day)}</span>
+            {d.made_with && <span className="mono faint" style={{ fontSize: 11 }}
+              title={d.made_with.models.map((m) => `${m.model} on ${mode === "offline" ? "the offline stand-in" : m.provider}: ${m.calls}`).join("\n")}>{madeWith(d, mode)}</span>}
           </div>
           <div className="h1">{headline(d)}</div>
           <div className="muted" style={{ fontSize: 13 }}>{note(d)}</div>

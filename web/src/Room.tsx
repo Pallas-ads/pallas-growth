@@ -1,7 +1,7 @@
 // 4a Team Room: conversation only. Team-internal steps fold into one line; output arrives as
 // cards that open in Deliverables; a message's replies open in the thread on the right.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { clock, type Fold, type Msg, type RoomItem } from "./api";
+import { clock, modelLabel, type Fold, type Mode, type Msg, type RoomItem } from "./api";
 import Composer from "./Composer";
 import { go, type Route } from "./route";
 import { ArtCard, Av, Stack, Text } from "./ui";
@@ -59,13 +59,16 @@ function Thr({ m, open }: { m: Msg; open: boolean }) {
   );
 }
 
-function MsgRow({ m, open, flash }: { m: Msg; open: boolean; flash: boolean }) {
+function MsgRow({ m, open, flash, mode }: { m: Msg; open: boolean; flash: boolean; mode?: Mode }) {
   const cls = "msg2" + (open ? " open" : "") + (flash ? " flash" : "");
+  const model = modelLabel(m.models, mode);
   return (
     <div className={cls} id={`i-${m.id}`}>
       <Av who={m.who} />
       <div>
-        <div className="mh"><b>{m.who.name}</b><span className="t">{clock(m.ts)}</span></div>
+        <div className="mh"><b>{m.who.name}</b>
+          {model && <span className="model" title="Model that wrote this">{model}</span>}
+          <span className="t">{clock(m.ts)}</span></div>
         <div className="mb"><Text text={m.text} /></div>
         {m.card && <ArtCard card={m.card} />}
         {(m.replies.length > 0 || m.mention || m.card) && <Thr m={m} open={open} />}
@@ -117,9 +120,9 @@ function Thread({ m, before, onClose }: { m: Msg; before: Fold | null; onClose: 
   );
 }
 
-export default function Room({ items, where, busy, error, route, sidebar }: {
+export default function Room({ items, where, busy, error, route, sidebar, mode }: {
   items: RoomItem[]; where: string; busy: string | null; error: string | null; route: Route;
-  sidebar: ReactNode;
+  sidebar: ReactNode; mode?: Mode;
 }) {
   const tab = route.q.get("tab") === "mentions" ? "mentions" : "all";
   const threadId = Number(route.q.get("thread")) || null;
@@ -195,7 +198,7 @@ export default function Room({ items, where, busy, error, route, sidebar }: {
             {shown.map((it) => {
               if (it.kind === "day") return <div className="daydiv" key={`d-${it.id}`}>{it.label}</div>;
               if (it.kind === "fold") return <FoldRow key={`f-${it.id}`} f={it} open={openFolds.has(it.id)} onToggle={() => toggle(it.id)} />;
-              return <MsgRow key={`m-${it.id}`} m={it} open={it.id === threadId} flash={it.id === focus} />;
+              return <MsgRow key={`m-${it.id}`} m={it} open={it.id === threadId} flash={it.id === focus} mode={mode} />;
             })}
           </div>
         </div>

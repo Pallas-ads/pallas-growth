@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.models import Model
 
+from pgt.harness.policy import CostMeter
 from pgt.harness.workspace import Workspace
 from pgt.loops.daily import run_daily_check
 from pgt.roles.operator import apply_change_set
@@ -28,6 +29,7 @@ async def simulate(
     seed: int = 7,
     plant_injection: bool = False,
     auto_approve: bool = True,
+    meter: CostMeter | None = None,
 ) -> Simulation:
     """Each day: the sandbox runs one day, then the team checks it. With `auto_approve`, the
     simulation stands in for the user and approves only the changes the gate allowed."""
@@ -38,7 +40,7 @@ async def simulate(
     sim = Simulation(ws, account)
     for _ in range(days):
         account.advance_day()
-        brief = await run_daily_check(ws, account, model)
+        brief = await run_daily_check(ws, account, model, meter)
         sim.briefs.append(brief)
         if not (auto_approve and brief.change_set_id and brief.review.verdict == "pass"):
             continue

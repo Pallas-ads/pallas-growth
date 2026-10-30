@@ -31,6 +31,8 @@ class Team:
     media_dir: str
     account: object = None
     fake: object = None
+    meter: object = None  # CostMeter shared by every loop; live runs carry a total cap
+    mode: str = "offline"  # "offline", "live" (Meta API) or "mixed" (Baseten + Meta API)
     busy: str | None = None  # what the team is doing right now, if anything
     error: str | None = None
     tasks: set = field(default_factory=set)
@@ -59,17 +61,45 @@ async def seed(team: Team, days: int = 7, seed: int = 7) -> None:
     from pgt.loops.simulate import simulate
     from pgt.loops.weekly import plan_week
 
-    sim = await simulate(days, team.model, team.ws, seed=seed)
+    sim = await simulate(days, team.model, team.ws, seed=seed, meter=team.meter)
     team.account = sim.account
-    await plan_week(team.ws, team.account, team.model)
+    await plan_week(team.ws, team.account, team.model, meter=team.meter)
 
 
 def offline_team(db: str, media_dir: str) -> Team:
+    from pgt.harness.policy import CostMeter
     from pgt.llm.media import MediaClient
     from pgt.llm.offline import offline_model
 
     model, fake = offline_model("muse-spark-1.3")
-    return Team(Workspace(db), model, MediaClient(fake.client()), media_dir, fake=fake)
+    ws = Workspace(db)
+    return Team(ws, model, MediaClient(fake.client()), media_dir, fake=fake,
+                meter=CostMeter(ws.events))
+
+
+def live_team(
+    db: str, media_dir: str, model_name: str = "muse-spark-1.3", provider: str = "meta",
+    effort: str = "medium", cap: float = 5.0,
+) -> Team:
+    """A team on the real models. Every paid call is checked against `cap` (US dollars, at list
+    price, for the whole workspace) before it is sent. Keys come from the environment or .env."""
+    from dotenv import load_dotenv
+
+    from pgt.harness.policy import CostMeter
+    from pgt.llm.media import MediaClient
+    from pgt.llm.meta import meta_client, responses_model
+
+    load_dotenv()
+    client = meta_client()
+    model = responses_model(client, model_name)
+    if provider == "mixed":
+        from pgt.llm.baseten import baseten_client, chat_model
+        from pgt.llm.routing import mixed
+
+        model = mixed(model, chat_model(baseten_client(), effort=effort))
+    ws = Workspace(db)
+    return Team(ws, model, MediaClient(client), media_dir, meter=CostMeter(ws.events, total=cap),
+                mode="mixed" if provider == "mixed" else "live")
 
 
 class Message(BaseModel):
@@ -105,7 +135,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         last = team.ws.events.list(since_id=0)[-1:] or []
         return {"busy": team.busy, "error": team.error, "where": views.where(team.ws),
                 "day": team.account.day if team.account else None,
-                "last_event_id": last[0].id if last else 0, "owner": views.OWNER}
+                "last_event_id": last[0].id if last else 0, "owner": views.OWNER,
+                "mode": team.mode}
 
     @app.get("/api/stream")
     async def stream():
@@ -161,7 +192,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         if key.endswith("/test_plan") and period.startswith("week"):
             week = int(period[4:])
             team.run("Producing creative", produce_week(
-                team.ws, team.account, team.model, team.media, team.media_dir, week=week))
+                team.ws, team.account, team.model, team.media, team.media_dir, week=week,
+                meter=team.meter))
         elif key.endswith("/change_set") and period.startswith("week"):
             week = int(period[4:])
 
@@ -206,7 +238,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         async def day():
             team.account.advance_day()
-            brief = await run_daily_check(team.ws, team.account, team.model)
+            brief = await run_daily_check(team.ws, team.account, team.model, team.meter)
             key = f"day{team.account.day}/change_set"
             record = team.ws.artifacts.latest(key)
             if (record and brief.review and brief.review.verdict == "pass"
@@ -225,12 +257,14 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         if team.account is None:
             raise HTTPException(409, "The demo week is still being set up")
-        team.run("Planning the week", plan_week(team.ws, team.account, team.model))
+        team.run("Planning the week",
+                 plan_week(team.ws, team.account, team.model, meter=team.meter))
         return {"ok": True}
 
     @app.get("/api/settings")
     async def settings():
         calls = team.ws.events.list("model.call")
+        cap = getattr(team.meter, "total", None)
         return {
             "facts": team.ws.facts.current().model_dump(mode="json"),
             "fact_version": team.ws.facts.version,
@@ -238,6 +272,10 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "tokens": sum(e.payload["input_tokens"] + e.payload["output_tokens"] for e in calls),
             "cost": round(sum(e.payload["cost"] for e in calls), 4),
             "offline": team.fake is not None,
+            "mode": team.mode,
+            "usage": views.usage(team.ws),
+            "cap": cap,
+            "remaining": None if cap is None else round(team.meter.remaining(), 4),
             "day": team.account.day if team.account else None,
             "now": datetime.now(UTC).isoformat(),
         }

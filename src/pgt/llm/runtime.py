@@ -129,6 +129,7 @@ class _Harness(AbstractCapability):
         request_context: ModelRequestContext,
         handler: WrapModelRequestHandler,
     ) -> ModelResponse:
+        self.scope.meter.check(self.role, self.scope.loop_id)  # refuse once the total cap is used
         response = None
         started = perf_counter()
         try:

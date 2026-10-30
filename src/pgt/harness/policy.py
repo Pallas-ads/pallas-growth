@@ -162,12 +162,35 @@ class SpendCapExceeded(Exception):
 
 
 class CostMeter:
+    """Per-call, per-role and per-loop caps, plus an optional `total` across the whole workspace.
+    `record` runs after a call and raises once a cap is passed; `check` runs before a paid call
+    and refuses it once the total is used up, so a live run cannot keep spending."""
+
     def __init__(
         self, events: EventLog, per_call: float = 0.25,
-        per_role: float = 0.50, per_loop: float = 2.00,
+        per_role: float = 0.50, per_loop: float = 2.00, total: float | None = None,
     ) -> None:
         self._events = events
         self.per_call, self.per_role, self.per_loop = per_call, per_role, per_loop
+        self.total = total
+
+    def check(self, role: str, loop_id: str) -> None:
+        if self.total is None:
+            return
+        spent = self.spent()
+        if spent >= self.total:
+            self._events.append(
+                "budget.exceeded", "system",
+                {"cap": "total", "caps": ["total"], "role": role, "cost": 0.0,
+                 "spent": round(spent, 4), "limit": self.total},
+                loop_id=loop_id,
+            )
+            raise SpendCapExceeded(
+                f"The ${self.total:g} spend cap for this workspace is used up (${spent:.2f})"
+            )
+
+    def remaining(self) -> float | None:
+        return None if self.total is None else max(self.total - self.spent(), 0.0)
 
     def record(self, role: str, loop_id: str, cost: float, **details) -> None:
         if not math.isfinite(cost) or cost < 0:
@@ -183,6 +206,8 @@ class CostMeter:
                 ("per_role", self.spent(role, loop_id), self.per_role),
                 ("per_loop", self.spent(loop_id=loop_id), self.per_loop),
             ]
+            if self.total is not None:
+                totals.append(("total", self.spent(), self.total))
             exceeded = [name for name, total, limit in totals if total > limit]
             if exceeded:
                 self._events.append(
