@@ -176,3 +176,13 @@ def test_reads_are_copies():
     account.insights()[0].spend = 999
     assert account.state().campaign("cmp_1").daily_budget == 40
     assert account.insights()[0].spend != 999
+
+
+def test_store_has_a_photo_of_each_product_it_advertises():
+    from pgt.sandbox import pet_store_scenario, product_names, product_photo
+
+    store = pet_store_scenario()
+    assert product_names(store) == ["dog harness", "cat water fountain"]
+    assert all(product_photo(store, name) is not None for name in product_names(store))
+    assert product_photo(store, "parrot cage") is None
+    assert product_names(None) == ["phone"]

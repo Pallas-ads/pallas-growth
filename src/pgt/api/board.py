@@ -11,6 +11,8 @@ from pathlib import Path
 from pgt.api.views import OWNER, Index, _media_url, period, provider, role, title
 from pgt.harness.workspace import Workspace
 from pgt.llm.meta import IMAGE_MODEL, SAM_MODEL
+from pgt.loops.weekly import shot_file
+from pgt.sandbox import product_names
 
 SANDBOX_ACCOUNT = "act_sandbox_0001"
 RANGES = (7, 14, 28)
@@ -399,11 +401,14 @@ def _made(ws, idx, account, media_dir, record, plans, facts) -> dict:
     text_calls = [e for e in _calls(ws, loop)
                   if e.payload["model"] not in (SAM_MODEL, IMAGE_MODEL)]
     text_models = sorted({e.payload["model"] for e in text_calls})
-    shot = Path(media_dir) / week / "product_shot.png"
+    test = next((t for t in plans.get(week, []) if t["test_id"] == test_id), None)
+    scenario = getattr(account, "scenario", None)
+    names = product_names(scenario)
+    what = (test or {}).get("brief", {}).get("product")
+    what = what if what in names else names[0]
+    shot = Path(media_dir) / week / shot_file(what, names[0])
     creatives_in_week = len({r.key for r in ws.artifacts.list(kind="CreativeSet")
                              if r.key.startswith(f"{week}/creative/")})
-    scenario = getattr(account, "scenario", None)
-    what = scenario.product_concept if scenario else "phone"
     photo = ("Studio photo made once with Muse Image for this synthetic store"
              if scenario and scenario.product_photo else "Synthetic stand-in for an uploaded photo")
     steps = [
@@ -437,7 +442,6 @@ def _made(ws, idx, account, media_dir, record, plans, facts) -> dict:
     if review and review.content.get("verdict") == "pass":
         steps.append({"title": f"Reviewer passed draft {record.version}",
                       "sub": "Every claim traces to evidence", "model": None, "final": True})
-    test = next((t for t in plans.get(week, []) if t["test_id"] == test_id), None)
     images = [{**img, "url": _media_url(img["path"], media_dir)} for img in c.get("images", [])]
     square = next((i["url"] for i in images if i["ratio"] == "1:1"), None)
     pub = idx.published.get(record.artifact_id)
@@ -474,25 +478,40 @@ def assets(ws: Workspace, account, media_dir: str) -> dict:
     items.sort(key=lambda a: (a["week"], a["updated"] or ""), reverse=True)
     root = Path(media_dir)
     scenario = getattr(account, "scenario", None)
-    if scenario is not None and scenario.product_photo:
-        what = scenario.product_concept
-        hook = (f"Studio photo of the {what}, made once with Muse Image for this synthetic store. "
-                f"SAM 3.1 cuts the {what} out of it, so every ad shows the real product.")
-    else:
-        hook = "Synthetic phone mock-up drawn in code. SAM 3.1 cuts the phone out of it."
-    for shot in sorted(root.glob("week*/product_shot.png"), reverse=True) if root.is_dir() else []:
-        week = shot.parent.name
-        used = [a["test_id"] for a in items if a["id"].startswith(f"{week}/")]
-        items.append({
-            "id": f"{week}/product_shot", "kind": "source", "title": "Product photo",
-            "hook": hook,
-            "test_id": None, "week": period(f"{week}/x"), "status": "src",
-            "status_label": "Source", "image": _media_url(str(shot), media_dir), "images": [],
-            "models": [], "after": "Used by " + ", ".join(used) if used else "Not used yet",
-            "bad": False, "steps": [], "facts": [["Week", period(f"{week}/x")],
-                                                 ["Used by", ", ".join(used) or "None yet"]],
-            "used_in": None, "deliverable": None, "source": None, "version": 1, "updated": None,
-        })
+    names = product_names(scenario)
+
+    def hook(what: str) -> str:
+        if scenario is None or not scenario.product_photo:
+            return "Synthetic phone mock-up drawn in code. SAM 3.1 cuts the phone out of it."
+        return (f"Studio photo of the {what}, made once with Muse Image for this synthetic "
+                f"store. SAM 3.1 cuts the {what} out of it, so every ad shows the real product.")
+
+    def shows(test: dict) -> str:
+        what = test.get("brief", {}).get("product")
+        return what if what in names else names[0]
+
+    made = {(a["id"].split("/")[0], a["test_id"]) for a in items}
+    weeks = sorted({p.name for p in root.glob("week*") if p.is_dir()}, reverse=True) \
+        if root.is_dir() else []
+    for week in weeks:
+        for what in names:
+            shot = root / week / shot_file(what, names[0])
+            if not shot.is_file():
+                continue
+            used = [t["test_id"] for t in plans.get(week, [])
+                    if shows(t) == what and (week, t["test_id"]) in made]
+            items.append({
+                "id": f"{week}/{shot.stem}", "kind": "source",
+                "title": "Product photo" if len(names) == 1 else f"Product photo: {what}",
+                "hook": hook(what),
+                "test_id": None, "week": period(f"{week}/x"), "status": "src",
+                "status_label": "Source", "image": _media_url(str(shot), media_dir),
+                "images": [], "models": [], "after": "Used by " + ", ".join(used) if used
+                else "Not used yet", "bad": False, "steps": [],
+                "facts": [["Week", period(f"{week}/x")], ["Used by", ", ".join(used) or "None yet"]],
+                "used_in": None, "deliverable": None, "source": None, "version": 1,
+                "updated": None,
+            })
     for e in ws.events.list("asset.uploaded"):
         p = e.payload
         items.append({

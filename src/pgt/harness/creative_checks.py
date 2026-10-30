@@ -145,6 +145,7 @@ def check_plan(
     insight_ids: set[str],
     active_campaign_ids: set[str],
     ad_ids: set[str],
+    products: set[str] | None = None,
     min_tests: int = 2,
     max_tests: int = 3,
 ) -> list[str]:
@@ -178,6 +179,9 @@ def check_plan(
         replaces = test.brief.replaces_ad_id
         if replaces is not None and replaces not in ad_ids:
             issues.append(f"{label} replaces unknown ad {replaces}.")
+        if products is not None and test.brief.product not in products:
+            issues.append(f"{label} shows {test.brief.product!r}, which has no photo on file; "
+                          f"pick one of {', '.join(sorted(products))}.")
     return issues
 
 

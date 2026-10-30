@@ -67,6 +67,7 @@ async def run_plan(
     account: dict,
     available_test_budget: float,
     issues: list[str] = (),
+    products: list[str] = ("phone",),
 ) -> TestPlanDraft:
     data = {
         "week": week,
@@ -75,6 +76,7 @@ async def run_plan(
         "insights": insights,
         "account": account,
         "available_test_budget": available_test_budget,
+        "products_on_file": list(products),
     }
     if issues:
         data["review_issues_to_fix"] = list(issues)
@@ -85,7 +87,9 @@ async def run_plan(
         fact_version,
         task=f"Plan two or three creative tests for week {week}. Each test responds to one or "
         "more reviewed findings and draws on at least one market insight. Put each test in an "
-        "active campaign. If a test is meant to replace a tired ad, set replaces_ad_id.",
+        "active campaign. If a test is meant to replace a tired ad, set replaces_ad_id. Each ad "
+        "shows exactly one product photo, so set brief.product to one name from "
+        "products_on_file and write the angle and key message around that product alone.",
         done_when="Every test cites evidence IDs from reviewed_findings and insight IDs from "
         "insights, exactly as given. budget_weight is 1-5 (code turns weights into dollars). "
         "Test names are unique. The brief's hook is a short opening line with no made-up numbers."

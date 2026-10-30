@@ -193,5 +193,5 @@ def test_no_product_found_escalates(tmp_path):
     ws, account, model, fake = week_one(responder)
     summary = plan_and_produce(ws, account, model, fake, tmp_path)
     assert summary.stage == "escalated"
-    assert summary.escalations == ["SAM 3.1 found no product in the product photo."]
+    assert summary.escalations == ["SAM 3.1 found no phone in the product photo."]
     assert ws.artifacts.latest("week1/change_set") is None

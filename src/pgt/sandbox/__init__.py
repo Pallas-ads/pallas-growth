@@ -11,6 +11,7 @@ from .scenario import (
     pet_store_drafts,
     pet_store_facts,
     pet_store_scenario,
+    product_names,
     product_photo,
 )
 
@@ -26,5 +27,6 @@ __all__ = [
     "pet_store_drafts",
     "pet_store_facts",
     "pet_store_scenario",
+    "product_names",
     "product_photo",
 ]

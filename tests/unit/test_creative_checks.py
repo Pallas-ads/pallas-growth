@@ -179,6 +179,7 @@ def planned(**update):
         stop_rule="Stop after 7 days or 3x target spend with no result.",
         evidence_ids=["ev-d7-test_1-readout"],
         brief=CreativeBrief(
+            product="phone",
             angle="Social proof",
             hook="42 people started this week",
             key_message="People like you are doing it.",
@@ -263,3 +264,19 @@ def test_answer(ledger):
     ]
     wrong = Answer(answer="It cost $3.10 per trial.", evidence_ids=["ev-d7-test_1-readout"])
     assert check_answer(wrong, ledger) == ["Number 3.1 in the answer matches no cited evidence."]
+
+
+def test_plan_shows_only_products_with_a_photo():
+    store = planned(name="Fountain", brief=planned().brief.model_copy(
+        update={"product": "cat water fountain"}))
+    kw = {**PLAN_KW, "products": {"dog harness", "cat water fountain"}}
+    assert check_plan(TestPlanDraft(summary="s", tests=[planned(), store]), **kw) == [
+        ("Test 0 shows 'phone', which has no photo on file; "
+         "pick one of cat water fountain, dog harness.")
+    ]
+
+
+def test_plans_saved_before_briefs_named_a_product_still_load():
+    old = planned().brief.model_dump(mode="json")
+    del old["product"]
+    assert CreativeBrief.model_validate(old).product == ""
