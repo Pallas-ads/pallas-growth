@@ -129,6 +129,10 @@ class SandboxAccount:
             key=lambda row: (row.day, row.ad_id),
         ))
 
+    def changes(self) -> list[dict]:
+        """Every write the Operator made, in order, each with the sim day it happened on."""
+        return deepcopy(self._changes)
+
     def writer(self) -> SandboxWriter:
         return SandboxWriter(self)
 

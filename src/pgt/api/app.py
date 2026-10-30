@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pgt.api import views
+from pgt.api import board, views
 from pgt.harness.workspace import Workspace
 from pgt.schemas import ChangeSet
 
@@ -110,6 +110,9 @@ class Message(BaseModel):
 
 class Note(BaseModel):
     note: str = ""
+
+
+MAX_UPLOAD = 5 * 1024 * 1024
 
 
 def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | None = 7) -> FastAPI:
@@ -279,6 +282,54 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "day": team.account.day if team.account else None,
             "now": datetime.now(UTC).isoformat(),
         }
+
+    @app.get("/api/dashboard")
+    async def dashboard(days: int = 7):
+        return board.dashboard(team.ws, team.account, days)
+
+    @app.get("/api/assets")
+    async def assets():
+        return board.assets(team.ws, team.account, team.media_dir)
+
+    @app.post("/api/assets/upload")
+    async def upload(request: Request, name: str = "upload.png"):
+        """A product photo from the owner. Checked as an image, re-saved as PNG, never trusted."""
+        import hashlib
+        import io
+        import re
+
+        from PIL import Image, UnidentifiedImageError
+
+        body = await request.body()
+        if not body:
+            raise HTTPException(400, "Empty upload")
+        if len(body) > MAX_UPLOAD:
+            raise HTTPException(413, "Images up to 5 MB")
+        try:
+            img = Image.open(io.BytesIO(body))
+            if img.format not in ("PNG", "JPEG"):
+                raise HTTPException(415, "PNG or JPEG only")
+            if img.width * img.height > 40_000_000:
+                raise HTTPException(413, "Image too large")
+            img.load()
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+            raise HTTPException(415, "Not an image") from exc
+        img = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        data = out.getvalue()
+        digest = hashlib.sha256(data).hexdigest()[:12]
+        folder = Path(team.media_dir) / "uploads"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{digest}.png"
+        path.write_bytes(data)
+        clean = re.sub(r"[^A-Za-z0-9 ._-]", "", Path(name).name)[:80] or "upload.png"
+        sim_day = team.account.day if team.account else None
+        team.ws.events.append("asset.uploaded", "user", {
+            "file": path.name, "path": str(path), "name": clean,
+            "width": img.width, "height": img.height, "sha256": digest,
+        }, sim_day=sim_day)
+        return {"ok": True, "id": f"upload/{path.name}"}
 
     @app.get("/api/media/{rel:path}")
     async def media(rel: str):

@@ -64,6 +64,40 @@ export type Detail = Deliverable & {
             brief?: { angle: string; hook: string } }[];
 };
 
+/** Dashboard: Insights-shaped rows from the sandbox, plus what the team did. */
+export type Link = { key: string; title: string };
+export type Kpi = { key: string; label: string; value: number | null; fmt: "money" | "int" | "pct";
+                    sub: string; tone: "" | "good" | "bad"; formula: string; hero?: boolean };
+export type Metrics = { spend: number; impressions: number; clicks: number; results: number;
+                        ctr: number | null; cpr: number | null; tone: "" | "under" | "over" };
+export type AdRow = Metrics & { id: string; name: string; status: string; status_label: string;
+                                waits: boolean; evidence: string | null };
+export type CampaignRow = Metrics & { id: string; name: string; status: string; status_label: string;
+  in_learning: boolean; budget: number; test_id: string | null; rows: number; ads: AdRow[] };
+export type Action = { n: number; day: number; who: Who; verb: string; text: string;
+                       evidence: string[]; link: Link | null };
+export type DashboardData = { ready: false; account: string } | {
+  ready: true; account: string; currency: string; days: number; start: number; end: number;
+  short: boolean; pulled: { day: number | null; ts: string } | null; target: number;
+  result_name: string; kpis: Kpi[];
+  evidence: { rows: number; first: string | null; last: string | null; fields: string;
+              level: string; used_in: Link | null };
+  series: { day: number; spend: number; results: number; cpr: number | null }[];
+  actions: Action[]; after: string | null; campaigns: CampaignRow[];
+  daily_total: number; daily_cap: number;
+};
+
+/** Creative Assets: every image the team made, with how it was made. */
+export type StepModel = { model: string; provider: string; calls: number | null; cost: number | null };
+export type Step = { title: string; sub: string; model: StepModel | null; final: boolean; by?: string };
+export type Asset = {
+  id: string; kind: "made" | "source" | "upload"; title: string; hook: string;
+  test_id: string | null; week: string | null; status: string; status_label: string;
+  version: number; updated: string | null; models: string[]; after: string; bad: boolean;
+  image: string | null; images: (Image & { path: string })[]; source: string | null;
+  steps: Step[]; facts: [string, string][]; used_in: Link | null; deliverable: string | null;
+};
+
 export type Mode = "offline" | "live" | "mixed";
 export type AppStatus = { busy: string | null; error: string | null; where: string;
                           day: number | null; last_event_id: number; owner: string; mode: Mode };
@@ -114,6 +148,18 @@ export const api = {
   runDay: () => call("/api/run/day", { method: "POST" }),
   runWeek: () => call("/api/run/week", { method: "POST" }),
   settings: () => call<SettingsData>("/api/settings"),
+  dashboard: (days: number) => call<DashboardData>(`/api/dashboard?days=${days}`),
+  assets: () => call<{ items: Asset[]; account: string }>("/api/assets"),
+  upload: async (file: File) => {
+    const res = await fetch(`/api/assets/upload?name=${encodeURIComponent(file.name)}`,
+                            { method: "POST", body: file });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail ?? detail; } catch { /* plain text error */ }
+      throw new Error(detail);
+    }
+    return res.json() as Promise<{ ok: boolean; id: string }>;
+  },
 };
 
 /** A counter that goes up whenever the event log or the team's busy state changes. */

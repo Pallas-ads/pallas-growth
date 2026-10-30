@@ -109,3 +109,61 @@ def test_messages_and_deliverables_name_their_models(client):
     d = client.get("/api/deliverables/week1/test_plan").json()
     assert d["made_with"]["calls"] >= 1
     assert d["made_with"]["models"][0]["model"] == "muse-spark-1.3"
+
+
+def test_dashboard_sums_the_insight_rows_and_pins_team_actions(client):
+    d = client.get("/api/dashboard").json()
+    assert d["ready"] and (d["start"], d["end"]) == (1, 7)
+    kpis = {k["key"]: k for k in d["kpis"]}
+    series_spend = round(sum(s["spend"] for s in d["series"]), 2)
+    assert kpis["spend"]["value"] == pytest.approx(series_spend)
+    assert kpis["results"]["value"] == sum(s["results"] for s in d["series"])
+    assert kpis["cpr"]["hero"] and kpis["cpr"]["tone"] == "good"
+    assert d["evidence"]["rows"] == 28 and d["evidence"]["first"] == "ev-d1-ad_1"
+    flag, change = d["actions"][0], d["actions"][1]
+    assert (flag["day"], flag["who"]["name"], flag["verb"]) == (3, "Analyst", "flagged")
+    assert "ev-d3-ad_1-ctr" in flag["evidence"]
+    assert change["who"]["name"] == "Operator" and change["link"]["key"] == "day3/change_set"
+    assert "paused Streak" in change["text"] and "simulated owner" in change["text"]
+    assert d["after"].startswith("Cost per trial was")
+    streak = next(a for c in d["campaigns"] for a in c["ads"] if a["name"] == "Streak")
+    assert streak["status_label"] == "Paused day 3"
+    assert client.get("/api/dashboard?days=14").json()["short"] is True
+
+
+def test_assets_trace_each_creative_and_launch(client):
+    assert [a["kind"] for a in client.get("/api/assets").json()["items"]] == []
+    client.post("/api/approve/week1/test_plan")
+    _idle(client)
+    items = client.get("/api/assets").json()["items"]
+    made = [a for a in items if a["kind"] == "made"]
+    assert len(made) == 2 and all(a["status_label"] == "In change set" for a in made)
+    steps = [s["title"] for s in made[0]["steps"]]
+    assert steps[1] == "Cut out the phone" and steps[-1].startswith("Reviewer passed")
+    assert made[0]["steps"][1]["model"]["model"] == "SAM 3.1"
+    assert made[0]["steps"][3]["model"]["model"] == "Muse Image"
+    assert made[0]["image"].startswith("/api/media/week1/")
+    assert any(a["kind"] == "source" for a in items)
+    client.post("/api/approve/week1/change_set")
+    _idle(client)
+    made = [a for a in client.get("/api/assets").json()["items"] if a["kind"] == "made"]
+    assert {a["status_label"] for a in made} == {"Created paused"}
+    assert all(dict(a["facts"])["Ad"].startswith("ad_") for a in made)
+    ops = client.get("/api/dashboard").json()["actions"]
+    assert "created 2 paused ads" in ops[-1]["text"].lower() and "Jieyi approved" in ops[-1]["text"]
+
+
+def test_upload_accepts_images_only(client):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), "red").save(buf, "JPEG")
+    r = client.post("/api/assets/upload?name=../../shot.jpg", content=buf.getvalue())
+    assert r.status_code == 200
+    up = next(a for a in client.get("/api/assets").json()["items"] if a["kind"] == "upload")
+    assert up["title"] == "shot.jpg" and up["after"] == "40 x 30"
+    assert client.get(up["image"]).status_code == 200
+    assert client.post("/api/assets/upload", content=b"<svg/>").status_code == 415
+    assert client.post("/api/assets/upload", content=b"").status_code == 400
