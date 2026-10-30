@@ -130,17 +130,36 @@ class ArtifactStore:
             if downstream.issubset(affected):
                 break
             affected.update(downstream)
+        # Applied change sets are history: what reached the account stays as it was (PRD §4.3).
+        applied = {e.refs[0] for e in self._events.list("changeset.applied") if e.refs}
         for record in records:
-            if record.status in {"superseded", "stale"} or record.artifact_id not in affected:
+            if (record.status in {"superseded", "stale"} or record.artifact_id not in affected
+                    or record.artifact_id in applied):
                 continue
-            record.status = "stale"
+            was, record.status = record.status, "stale"
             self._save(record)
             self._events.append(
-                "artifact.stale", "system", {**reason, "artifact_id": record.artifact_id},
+                "artifact.stale", "system",
+                {**reason, "artifact_id": record.artifact_id, "was": was},
                 refs=[record.artifact_id], sim_day=record.sim_day,
             )
             stale.append(record.artifact_id)
         return stale
+
+    def keep(self, artifact_id: str, reason: str, actor: str = "growth_lead") -> ArtifactRecord:
+        """Undo a stale mark after a re-run showed that nothing this artifact uses changed (the
+        early cutoff a build system makes when a rebuilt input comes out the same)."""
+        with self._events._transaction():
+            record = self.get(artifact_id)
+            if record is None or record.status != "stale":
+                raise ValueError(f"{artifact_id} is not stale")
+            marks = [e for e in self._events.list("artifact.stale") if artifact_id in e.refs]
+            record.status = marks[-1].payload.get("was", "in_review") if marks else "in_review"
+            self._save(record)
+            self._events.append("artifact.kept", actor,
+                                {"artifact_id": artifact_id, "key": record.key, "reason": reason},
+                                refs=[artifact_id], sim_day=record.sim_day)
+            return record
 
     def mark_stale_for_facts(self, changed: list[str], new_version: int) -> list[str]:
         with self._events._transaction():
