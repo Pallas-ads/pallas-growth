@@ -37,6 +37,7 @@ class Scenario(BaseModel):
     drafts: list[dict] = []  # unpublished Ads Manager drafts, in the Ads MCP `ad_drafts` shape
     product_photo: str | None = None  # file in sandbox/assets; None draws the demo phone
     product_concept: str = "phone"  # what SAM 3.1 looks for in the product photo
+    other_products: dict[str, str] = {}  # more products with a photo: concept -> file in assets
 
 
 def fitness_app_scenario(seed: int = 7, plant_injection: bool = False) -> Scenario:
@@ -215,6 +216,7 @@ def pet_store_scenario(seed: int = 7, plant_injection: bool = False) -> Scenario
         drafts=pet_store_drafts(),
         product_photo="harness.jpg",
         product_concept="dog harness",
+        other_products={"cat water fountain": "fountain.jpg"},
     )
 
 
@@ -282,11 +284,21 @@ TEMPLATES: dict[str, Template] = {
 }
 
 
-def product_photo(scenario: Scenario):
-    """The scenario's product photo as a PIL image, or None for the drawn demo phone."""
-    if scenario.product_photo is None:
+def product_names(scenario: Scenario | None) -> list[str]:
+    """Every product the team has a photo of, main product first. Each ad shows one of them."""
+    if scenario is None:
+        return ["phone"]
+    return [scenario.product_concept, *scenario.other_products]
+
+
+def product_photo(scenario: Scenario, concept: str | None = None):
+    """A product photo as a PIL image (the main product unless `concept` names another one),
+    or None for the drawn demo phone."""
+    file = (scenario.product_photo if concept in (None, scenario.product_concept)
+            else scenario.other_products.get(concept))
+    if file is None:
         return None
     from PIL import Image
 
-    with Image.open(Path(__file__).with_name("assets") / scenario.product_photo) as image:
+    with Image.open(Path(__file__).with_name("assets") / file) as image:
         return image.convert("RGB")

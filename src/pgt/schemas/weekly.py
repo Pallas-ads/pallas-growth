@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class _Out(BaseModel):
@@ -45,11 +45,20 @@ class MarketResearch(_Out):
 
 
 class CreativeBrief(_Out):
+    product: str  # the one product the ad shows, a name from products_on_file
     angle: str
     hook: str
     key_message: str
     insight_ids: list[str]  # insights this brief draws on, e.g. "ins-w1-2"
     replaces_ad_id: str | None  # the ad this creative is meant to replace, if any
+
+    @model_validator(mode="before")
+    @classmethod
+    def _older_plans(cls, data):
+        """Plans saved before briefs named a product show the main product."""
+        if isinstance(data, dict) and "product" not in data:
+            return {"product": "", **data}
+        return data
 
 
 class PlannedTest(_Out):

@@ -32,7 +32,12 @@ Code has already checked lengths, numbers and evidence. You judge what code cann
 follow the brand voice and every constraint in the facts, does it avoid claims that need proof
 (being #1 or the best, guaranteed results, weight loss or other health outcomes), is the image
 readable with the headline, and does the ad match its test brief. Ask for a redo only for a
-problem the producer can fix; list each fix as one plain line."""
+problem the producer can fix; list each fix as one plain line.
+How the image is made: Muse Image paints a background from image_prompt with no text, SAM 3.1
+cuts the product named in brief.product out of the owner's real photo, and layout code places
+that cutout and the ad's headline on a dark band at the top. The band and the single product
+are the house layout, not faults. A claim that cites evidence IDs or a source URL has already
+passed the evidence check."""
 
 
 def review_findings(findings: list[Finding], ledger: EvidenceLedger) -> list[str]:
