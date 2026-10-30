@@ -1,0 +1,48 @@
+# Publishes the public demo: the web app's replay build plus a recorded live run (replay/),
+# made with `pgt replay`. Synthetic sandbox data only; the site calls no model and holds no key.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", "replay/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the replay app
+        working-directory: web
+        run: npm ci && npm run build:replay
+      - name: Add the recorded run
+        run: cp -R replay/data replay/media web/dist-replay/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist-replay
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

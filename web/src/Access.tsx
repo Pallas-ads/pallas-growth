@@ -280,7 +280,7 @@ export function Wizard({ a, start, onClose, onDone }: {
     <div className="wiz-bg" role="dialog" aria-modal="true" aria-labelledby="wiz-h">
       <div className="wiz">
         <div className="row" style={{ gap: 10 }}>
-          <img className="mark-logo" src="/pallas-logo.png" alt="Pallas" />
+          <img className="mark-logo" src="pallas-logo.png" alt="Pallas" />
           <div><div className="mark-name">Set up your Growth Team</div><div className="mark-sub">{sub}</div></div>
         </div>
         <div className="steps">

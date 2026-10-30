@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Wizard } from "./Access";
-import { api, useData, useLive, type Mode } from "./api";
+import { api, REPLAY, useData, useLive, type Mode } from "./api";
 import Assets from "./Assets";
 import { TEAM } from "./avatars";
 import Dashboard from "./Dashboard";
@@ -23,11 +23,12 @@ function Sidebar({ route, waiting, mode, account }: { route: Route; waiting: num
   return (
     <aside className="col rule-r" style={{ background: "var(--sunken)", padding: "18px 12px", gap: 22 }}>
       <div className="mark" style={{ padding: "0 6px" }}>
-        <img className="mark-logo" src="/pallas-logo.png" alt="Pallas" />
+        <img className="mark-logo" src="pallas-logo.png" alt="Pallas" />
         <div><div className="mark-name">Growth Team</div><div className="mark-sub">{account ?? "No account connected"}</div></div>
       </div>
-      {mode && <a className={"mode " + mode} href="#/settings" title="Which models answer. Details in Settings.">
-        <span className="dot" />{MODE_LABEL[mode]}</a>}
+      {mode && <a className={"mode " + mode} href="#/settings"
+                  title={REPLAY ? "A recorded live run, read-only. Models and spend are in Settings." : "Which models answer. Details in Settings."}>
+        <span className="dot" />{REPLAY ? "Replay of a live run" : MODE_LABEL[mode]}</a>}
       <nav className="nav">
         {item("room", "Team Room")}
         {item("deliverables", "Deliverables", waiting > 0 &&
@@ -40,12 +41,12 @@ function Sidebar({ route, waiting, mode, account }: { route: Route; waiting: num
       <div className="col" style={{ gap: 8, padding: "0 6px" }}>
         <div className="eyebrow">The team</div>
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
-          {TEAM.map((t) => <img key={t.code} className="av sm" src={`/avatars/${t.code}.svg`} alt={t.name} title={t.name} />)}
+          {TEAM.map((t) => <img key={t.code} className="av sm" src={`avatars/${t.code}.svg`} alt={t.name} title={t.name} />)}
         </div>
         <div className="mono faint" style={{ fontSize: 10.5 }}>Built with Muse Spark Open</div>
       </div>
       <div className="row" style={{ gap: 10, padding: "0 6px" }}>
-        <img className="av" src="/owner.jpg" alt={OWNER} />
+        <img className="av" src="owner.jpg" alt={OWNER} />
         <div><div className="ink" style={{ fontWeight: 600 }}>{OWNER}</div>
           <div className="mono muted" style={{ fontSize: 11 }}>Owner · Oct 29 2026</div></div>
       </div>
@@ -72,7 +73,7 @@ export default function App() {
   // First run, "Switch account", or back from facebook.com with accounts to pick.
   const a = access.data;
   const asked = route.page === "settings" && (route.q.get("setup") || route.q.get("meta") === "pick");
-  const wizard = a && (asked || (!a.connection && !later)) ? (
+  const wizard = !REPLAY && a && (asked || (!a.connection && !later)) ? (
     <Wizard key={asked ? "asked" : "first"} a={a} start={route.q.get("meta") === "pick" && a.meta_accounts.length ? 1 : 0}
             onClose={() => { setLater(true); if (asked) go("settings", { s: "connection" }); }}
             onDone={() => { setLater(true); refresh(); if (asked) go("settings", { s: "connection" }); }} />

@@ -154,7 +154,20 @@ export function costLabel(cost: number | null | undefined): string {
   return cost > 0 && cost < 0.001 ? "<$0.001" : `$${cost.toFixed(3)}`;
 }
 
+/** The GitHub Pages build (vite build --mode replay) reads a recorded run from data/ and changes nothing.
+ *  `pgt replay` writes those files, named the same way as here. */
+export const REPLAY = import.meta.env.MODE === "replay";
+export const READ_ONLY = "This is a recorded replay, so nothing changes here. Run PGT locally to approve, send back or talk to the team.";
+
+function replayFile(path: string): string {
+  return "data/" + path.replace(/^\/api\//, "").replace("?days=", "-") + ".json";
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  if (REPLAY) {
+    if (init?.method && init.method !== "GET") throw new Error(READ_ONLY);
+    path = replayFile(path);
+  }
   const res = await fetch(path, {
     ...init,
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
@@ -195,6 +208,7 @@ export const api = {
   drafts: () => call<Drafts>("/api/drafts"),
   assets: () => call<{ items: Asset[] } & Which>("/api/assets"),
   upload: async (file: File) => {
+    if (REPLAY) throw new Error(READ_ONLY);
     const res = await fetch(`/api/assets/upload?name=${encodeURIComponent(file.name)}`,
                             { method: "POST", body: file });
     if (!res.ok) {
@@ -210,6 +224,7 @@ export const api = {
 export function useLive(): { tick: number; busy: string | null } {
   const [state, setState] = useState({ tick: 0, busy: null as string | null });
   useEffect(() => {
+    if (REPLAY) return; // a recorded run never changes
     const es = new EventSource("/api/stream");
     es.onmessage = (m) => {
       const data = JSON.parse(m.data);

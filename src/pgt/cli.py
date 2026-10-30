@@ -5,6 +5,9 @@ pgt weekly [--template app|ecommerce] [--yes] [--live] [--provider meta|mixed] [
            [--out runs/media]
 pgt serve [--template app|ecommerce] [--port 8000] [--db path] [--live] [--provider meta|mixed]
           [--cap 5] [--public] [--cold] [--ssl-certfile cert.pem --ssl-keyfile key.pem]
+pgt replay --source http://127.0.0.1:8000 [--out replay]
+
+replay records a running team as the static, read-only site that GitHub Pages serves.
 
 --template picks the synthetic business in the sandbox: "app" is Pallas Fit, a fitness app;
 "ecommerce" is Northpaw Supply, an online pet store with two weeks of history.
@@ -79,12 +82,22 @@ def main(argv: list[str] | None = None) -> None:
         "--cap", type=float, default=5.0,
         help="Live runs stop before any call once this many dollars are spent (list price)",
     )
+    rep = sub.add_parser("replay", help="Record a running team as a static, read-only site")
+    rep.add_argument("--source", default="http://127.0.0.1:8000", help="The running pgt serve")
+    rep.add_argument("--out", default="replay", help="Folder for data/ and media/")
     for p in (sim, week, serve):
         p.add_argument("--template", choices=["app", "ecommerce"], default="app",
                        help="Synthetic business in the sandbox")
     args = parser.parse_args(argv)
     if args.command == "serve":
         return _serve(args)
+    if args.command == "replay":
+        from pgt.replay import export, http_get
+
+        manifest = export(http_get(args.source), Path(args.out))
+        print(f"Replay in {args.out}: {manifest['files']} views, {manifest['images']} images, "
+              f"{manifest['model_calls']} model calls for ${manifest['cost']:.2f} ({manifest['mode']}).")
+        return None
     asyncio.run(_simulate(args) if args.command == "simulate" else _weekly(args))
 
 
