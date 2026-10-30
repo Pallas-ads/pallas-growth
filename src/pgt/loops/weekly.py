@@ -421,23 +421,35 @@ async def produce_week(
     evidence_ids = sorted({i for f in findings.findings for i in f.evidence_ids})
     evidence = [ws.ledger.get(i) for i in evidence_ids if ws.ledger.has(i)]
 
-    # The product photo is segmented once with SAM 3.1 and reused for every test.
+    # The product photo is segmented once with SAM 3.1 and reused for every test; skipped when
+    # every ad is reused as it was.
     media_dir = Path(media_dir) / f"week{week}"
-    if product_shot is None:
-        product_shot, _ = make_demo_product_shot()
-    save_png(product_shot, media_dir / "product_shot.png")
-    try:
-        boxes = await media.segment(scope, "producer", product_shot, "phone")
-    except ValueError:
-        escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
-        return _summary(scope, week, "escalated", plan_id=plan.plan_id)
-    product = cutout(product_shot, boxes[0])
+    product = None
+    if note or any(_reusable(ws, week, t.test_id) is None for t in plan.tests):
+        if product_shot is None:
+            product_shot, _ = make_demo_product_shot()
+        save_png(product_shot, media_dir / "product_shot.png")
+        try:
+            boxes = await media.segment(scope, "producer", product_shot, "phone")
+        except ValueError:
+            escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
+            return _summary(scope, week, "escalated", plan_id=plan.plan_id)
+        product = cutout(product_shot, boxes[0])
     backgrounds: dict[str, Image.Image] = {}
 
     async def answer_for(question: str, issues: list[str]):
         return await run_answer(scope, model, facts, fv, question, evidence, issues)
 
     async def produce(test: PlanTest) -> CreativeSet | None:
+        reused = None if note else _reusable(ws, week, test.test_id)
+        if reused is not None:
+            ws.events.append(
+                "creative.reused", "growth_lead",
+                {"test_id": test.test_id, "creative_id": reused.creative_id},
+                refs=[ws.artifacts.latest(f"week{week}/creative/{test.test_id}").artifact_id],
+                sim_day=account.day, loop_id=scope.loop_id,
+            )
+            return reused
         task = f"Creative for {test.test_id}"
         if note:
             task = f"Redo the creative for {test.test_id} with the owner's note: {note}"
@@ -554,6 +566,17 @@ async def produce_week(
         creative_ids=creative_ids,
         change_set_id=change_set.change_set_id,
     )
+
+
+def _reusable(ws: Workspace, week: int, test_id: str) -> CreativeSet | None:
+    """The last creative for this test, if it passed review and nothing it used has changed
+    since (a re-split budget keeps it; see loops/refresh.py)."""
+    creative = ws.artifacts.latest(f"week{week}/creative/{test_id}")
+    review = ws.artifacts.latest(f"week{week}/review/{test_id}")
+    if (creative is None or creative.status in ("stale", "superseded") or review is None
+            or review.content.get("verdict") != "pass" or review.inputs != [creative.artifact_id]):
+        return None
+    return CreativeSet.model_validate(creative.content)
 
 
 async def _render(

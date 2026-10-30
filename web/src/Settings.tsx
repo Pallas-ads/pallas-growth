@@ -1,7 +1,7 @@
 // Settings: the Meta connection and how much the team may do, the house rules, the business facts
 // the team works from, what the models cost, and the controls that move the simulated week forward.
 import { Fragment, useState, type ReactNode } from "react";
-import { Connection, HouseRulesForm } from "./Access";
+import { Connection, FactsForm, HouseRulesForm } from "./Access";
 import { api, money, useData, type AccessData, type SettingsData } from "./api";
 import type { Route } from "./route";
 import { Av } from "./ui";
@@ -16,6 +16,9 @@ function rows(obj: Record<string, unknown>): [string, string][] {
     return [[label, String(v)]];
   });
 }
+
+// Edited in the form above the list.
+const NUMBERS = new Set(["weekly budget", "test budget share", "target cost per result"]);
 
 const SECTIONS = [
   { key: "connection", label: "Meta connection" },
@@ -79,8 +82,11 @@ export default function Settings({ tick, busy, sidebar, route, access, onAccess 
             {s === "facts" && data && (
               <section className="section">
                 <div className="h2">Business facts · version {data.fact_version}</div>
+                <FactsForm facts={data.facts as unknown as Parameters<typeof FactsForm>[0]["facts"]}
+                           version={data.fact_version} onChange={onAccess} />
                 <dl className="kv facts">
-                  {rows(data.facts).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+                  {rows(data.facts).filter(([k]) => !NUMBERS.has(k))
+                    .map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
                 </dl>
               </section>
             )}

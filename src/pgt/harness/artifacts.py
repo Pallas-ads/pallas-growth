@@ -130,8 +130,17 @@ class ArtifactStore:
             if downstream.issubset(affected):
                 break
             affected.update(downstream)
-        # Applied change sets are history: what reached the account stays as it was (PRD §4.3).
+        # Applied change sets, and the work they were built from, are history: what reached the
+        # account stays as it was (PRD §4.3).
         applied = {e.refs[0] for e in self._events.list("changeset.applied") if e.refs}
+        by_id = {r.artifact_id: r for r in records}
+        todo = list(applied)
+        while todo:
+            record = by_id.get(todo.pop())
+            for upstream in record.inputs if record else []:
+                if upstream not in applied:
+                    applied.add(upstream)
+                    todo.append(upstream)
         for record in records:
             if (record.status in {"superseded", "stale"} or record.artifact_id not in affected
                     or record.artifact_id in applied):
@@ -146,7 +155,8 @@ class ArtifactStore:
             stale.append(record.artifact_id)
         return stale
 
-    def keep(self, artifact_id: str, reason: str, actor: str = "growth_lead") -> ArtifactRecord:
+    def keep(self, artifact_id: str, reason: str, actor: str = "growth_lead",
+             loop_id: str | None = None) -> ArtifactRecord:
         """Undo a stale mark after a re-run showed that nothing this artifact uses changed (the
         early cutoff a build system makes when a rebuilt input comes out the same)."""
         with self._events._transaction():
@@ -158,7 +168,7 @@ class ArtifactStore:
             self._save(record)
             self._events.append("artifact.kept", actor,
                                 {"artifact_id": artifact_id, "key": record.key, "reason": reason},
-                                refs=[artifact_id], sim_day=record.sim_day)
+                                refs=[artifact_id], sim_day=record.sim_day, loop_id=loop_id)
             return record
 
     def mark_stale_for_facts(self, changed: list[str], new_version: int) -> list[str]:

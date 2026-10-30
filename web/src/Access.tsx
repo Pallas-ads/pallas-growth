@@ -3,7 +3,7 @@
 // three. The public demo only offers the labelled sandbox; the real Facebook Login for Business
 // runs on facebook.com, from a local install.
 import { useEffect, useState } from "react";
-import { api, money, type AccessData, type Account, type Rules, type RulesPatch } from "./api";
+import { api, money, type AccessData, type Account, type FactsPatch, type Rules, type RulesPatch } from "./api";
 import { go } from "./route";
 import { OWNER } from "./ui";
 
@@ -177,7 +177,58 @@ export function HouseRulesForm({ a, onChange }: { a: AccessData; onChange: () =>
         {dirty && <button className="btn ghost xs" disabled={busy} onClick={() => setD(draftOf(a.rules))}>Undo</button>}
         <span className={typeof patch === "string" || error ? "err" : "muted"} style={{ fontSize: 12 }}>
           {typeof patch === "string" ? patch : error ??
-            `Facts version ${a.fact_version}. Saving makes a new version; work built on the old rules is marked stale.`}
+            `Facts version ${a.fact_version}. Saving makes a new version; pending work is re-checked against the new rules.`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- business facts
+
+type Numbers = { weekly_budget: number; test_budget_share: number; target_cost_per_result: number };
+
+export function FactsForm({ facts, version, onChange }: {
+  facts: Numbers; version: number; onChange: () => void;
+}) {
+  const { act, error, busy } = useAct(onChange);
+  const draftFrom = (f: Numbers) => ({
+    budget: String(f.weekly_budget), share: String(Math.round(f.test_budget_share * 100)),
+    target: String(f.target_cost_per_result),
+  });
+  const [d, setD] = useState(() => draftFrom(facts));
+  const key = JSON.stringify(facts);
+  useEffect(() => setD(draftFrom(facts)), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const budget = Number(d.budget), share = Number(d.share) / 100, target = Number(d.target);
+  let problem: string | null = null;
+  if (!(budget > 0)) problem = "The weekly budget must be above $0";
+  else if (!(share > 0 && share <= 1)) problem = "The test share must be between 1% and 100%";
+  else if (!(target > 0)) problem = "The target cost must be above $0";
+  const patch: FactsPatch = {};
+  if (!problem) {
+    if (budget !== facts.weekly_budget) patch.weekly_budget = budget;
+    if (Math.abs(share - facts.test_budget_share) > 1e-9) patch.test_budget_share = share;
+    if (target !== facts.target_cost_per_result) patch.target_cost_per_result = target;
+  }
+  const dirty = !!problem || Object.keys(patch).length > 0;
+  const set = (k: keyof typeof d) => (v: string) => setD({ ...d, [k]: v });
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <div className="rules">
+        <div className="r">Weekly budget<small>What the account may spend in a week</small></div>
+        <div className="v"><Field label="Weekly budget" pre="$" value={d.budget} onChange={set("budget")} /></div>
+        <div className="r">Kept for creative tests<small>Share of the weekly budget the test plan splits</small></div>
+        <div className="v"><Field label="Test share" post="%" value={d.share} onChange={set("share")} /></div>
+        <div className="r">Target cost per result<small>What counts as good when the team reads results</small></div>
+        <div className="v"><Field label="Target cost per result" pre="$" value={d.target} onChange={set("target")} /></div>
+      </div>
+      <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+        <button className="btn ink xs" disabled={busy || !dirty || !!problem}
+                onClick={() => act(() => api.setFacts(patch))}>Save facts</button>
+        {dirty && <button className="btn ghost xs" disabled={busy} onClick={() => setD(draftFrom(facts))}>Undo</button>}
+        <span className={problem || error ? "err" : "muted"} style={{ fontSize: 12 }}>
+          {problem ?? error ??
+            `Facts version ${version}. Saving marks work built on the old values stale; the team then redoes only that work.`}
         </span>
       </div>
     </div>

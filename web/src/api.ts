@@ -126,6 +126,7 @@ export type AccessData = {
   rules: Rules; presets: Record<string, Partial<Rules>>; weekly_budget: number;
   weekly_test_budget: number; constraints: string[]; fact_version: number;
 };
+export type FactsPatch = { weekly_budget?: number; test_budget_share?: number; target_cost_per_result?: number };
 export type RulesPatch = Partial<Omit<Rules, "check_time">>;
 
 /** "muse-spark-1.3", or "offline stand-in" when no real model answered. */
@@ -170,6 +171,8 @@ export const api = {
   disconnect: () => call("/api/access/disconnect", { method: "POST" }),
   houseRules: (patch: RulesPatch) =>
     call<{ fact_version: number }>("/api/house-rules", { method: "POST", body: JSON.stringify(patch) }),
+  setFacts: (patch: FactsPatch) =>
+    call<{ fact_version: number; refresh: boolean }>("/api/facts", { method: "POST", body: JSON.stringify(patch) }),
   dashboard: (days: number) => call<DashboardData>(`/api/dashboard?days=${days}`),
   assets: () => call<{ items: Asset[]; account: string }>("/api/assets"),
   upload: async (file: File) => {

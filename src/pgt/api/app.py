@@ -132,6 +132,16 @@ class Rules(BaseModel):
     protect_learning_phase: bool | None = None
 
 
+class Facts(BaseModel):
+    """A change to the numbers the team plans with. Missing fields keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weekly_budget: float | None = Field(None, gt=0, le=1_000_000)
+    target_cost_per_result: float | None = Field(None, gt=0, le=100_000)
+    test_budget_share: float | None = Field(None, gt=0, le=1)
+
+
 class Connect(BaseModel):
     kind: Literal["sandbox", "meta"] = "sandbox"
     account_id: str | None = None
@@ -393,9 +403,31 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             return team.ws.facts.version
         return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user")
 
+    def _refresh(before: int) -> bool:
+        """After the owner changed a fact, redo the stale work that needs no model."""
+        from pgt.loops.refresh import refresh
+
+        if team.ws.facts.version == before or team.account is None:
+            return False
+        changed = team.ws.events.list("fact.changed")[-1].payload["changed"]
+        team.run("Re-running stale work", refresh(team.ws, team.account, changed))
+        return True
+
     @app.post("/api/house-rules")
     async def house_rules(body: Rules):
-        return {"ok": True, "fact_version": _set_rules(body)}
+        before = team.ws.facts.version
+        version = _set_rules(body)
+        return {"ok": True, "fact_version": version, "refresh": _refresh(before)}
+
+    @app.post("/api/facts")
+    async def set_facts(body: Facts):
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}. Change the facts after.")
+        before = team.ws.facts.version
+        update = body.model_dump(exclude_none=True)
+        if update:
+            team.ws.facts.set(team.ws.facts.current().model_copy(update=update), "user")
+        return {"ok": True, "fact_version": team.ws.facts.version, "refresh": _refresh(before)}
 
     @app.post("/api/access/connect")
     async def connect(body: Connect):
@@ -414,7 +446,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         if body.rules:
+            before = team.ws.facts.version
             _set_rules(body.rules)
+            _refresh(before)
         return {"ok": True}
 
     @app.post("/api/access/level")

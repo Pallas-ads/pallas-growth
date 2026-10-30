@@ -29,7 +29,7 @@ function FoldRow({ f, open, onToggle }: { f: Fold; open: boolean; onToggle: () =
         <Stack people={f.actors} />
         <span>{names(f.names)} {f.tail}</span>
         <span className="t">{span(f)}</span>
-        <span className="more">{open ? "Hide" : `${f.items.length} messages`}</span>
+        <span className="more">{open ? "Hide" : `${f.items.length} ${f.items.length === 1 ? "message" : "messages"}`}</span>
       </button>
       {open && (
         <div className="fold-items">

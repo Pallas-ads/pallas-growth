@@ -212,7 +212,8 @@ def test_first_run_connects_the_sandbox_with_a_level_and_rules(client):
     assert a["rules"]["preset"] == "custom" and a["fact_version"] == 2
     texts = [i["text"] for i in client.get("/api/room").json()["items"] if i["kind"] == "msg"]
     assert any(t.startswith("Set the team to L1 Propose") for t in texts)
-    assert any(t.startswith("Changed house rules (facts version 2)") for t in texts)
+    assert any(t.startswith("Changed house rules (daily budget cap from $") and "to $80)" in t
+               for t in texts)
     # A real account cannot be connected without the Meta login.
     assert client.post("/api/access/connect", json={"kind": "meta", "account_id": "act_1"}
                        ).status_code == 409
@@ -260,3 +261,24 @@ def test_operator_refuses_below_l2_even_with_an_approval(tmp_path):
         with pytest.raises(PermissionError):
             access.set_level(team.ws, 2, actor="operator")
     team.ws.close()
+
+
+def test_budget_change_resplits_the_plan_and_says_what_reran(client):
+    assert client.post("/api/facts", json={"weekly_budget": -5}).status_code == 422
+    calls = client.get("/api/settings").json()["model_calls"]
+    res = client.post("/api/facts", json={"weekly_budget": 280})
+    assert res.status_code == 200 and res.json()["refresh"] is True
+    _idle(client)
+    settings = client.get("/api/settings").json()
+    assert settings["facts"]["weekly_budget"] == 280 and settings["model_calls"] == calls
+    assert [d["title"] for d in _waiting(client)] == ["Test plan · Week 1 · v2"]
+    msgs = [i for i in client.get("/api/room").json()["items"] if i["kind"] == "msg"]
+    texts = [m["text"] for m in msgs]
+    assert any(t.startswith("Changed weekly budget from $385 to $280.") for t in texts)
+    assert any("re-split $77 to $56" in t and "no model was called" in t for t in texts)
+    # The re-split plan was made in code, so its message names no model.
+    (v2,) = [m for m in msgs if (m.get("card") or {}).get("title") == "Test plan · Week 1 · v2"]
+    assert v2["models"] == []
+    # Saving the same values again changes nothing and re-runs nothing.
+    res = client.post("/api/facts", json={"weekly_budget": 280})
+    assert res.json()["refresh"] is False
