@@ -82,7 +82,11 @@ async def seed(team: Team, days: int | None = None, seed: int = 7) -> None:
     from pgt.loops.weekly import apply_week, plan_week, produce_week
     from pgt.sandbox import TEMPLATES
 
-    days = days or 7 * TEMPLATES[team.template].history_weeks
+    template = TEMPLATES[team.template]
+    days = days or 7 * template.history_weeks
+    if access.connection(team.ws) is None:  # the history starts with the sandbox connected at L2
+        access.connect(team.ws, dict(access.SANDBOX, name=template.sandbox_name), access.APPLY,
+                       sim_day=0)
     account = None
     while True:
         week_days = min(7, days - (account.day if account else 0))
