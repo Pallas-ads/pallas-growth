@@ -346,7 +346,7 @@ def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict
         text = (f"Nothing written: the team is at L1 Propose. Apply {' and '.join(parts)} "
                 "yourself in Ads Manager.")
         return "operator", text, _card(ws, idx, record, names) if record else None
-    if e.type == "fact.changed" and p.get("version", 1) > 1:
+    if e.type == "fact.changed" and p.get("version", 1) > 1 and not p.get("setup"):
         before, after = ws.facts.get(p["version"] - 1), ws.facts.get(p["version"])
         parts = [_fact_change(k, getattr(before, k), getattr(after, k))
                  for k in p.get("changed", [])]

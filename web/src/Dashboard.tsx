@@ -193,7 +193,7 @@ function DraftRow({ n, depth }: { n: DraftNode; depth: number }) {
   return (
     <>
       <div className="draft" style={{ paddingLeft: depth * 18 }}>
-        <span className="lvl">{n.level}</span>
+        <span className="dlvl">{n.level}</span>
         <span className="nm">{n.name || <span className="muted">Untitled</span>}
           {n.id && <span className="mono muted" style={{ fontSize: 10.5 }}> {n.id}</span>}</span>
         {n.status && <span className="lbl">{n.status.toLowerCase()}</span>}
@@ -207,7 +207,8 @@ function DraftRow({ n, depth }: { n: DraftNode; depth: number }) {
   );
 }
 
-/** Unpublished drafts staged in Ads Manager, as the Ads MCP returned them. PGT never edits them. */
+/** Unpublished drafts staged in Ads Manager: a real account's through the Ads MCP, or the sandbox's
+ *  synthetic ones. PGT never edits them. */
 function Drafts({ tick }: { tick: number }) {
   const { data, error } = useData(() => api.drafts(), [tick]);
   const c = data?.counts;
@@ -274,9 +275,11 @@ export default function Dashboard({ tick, route, sidebar }: { tick: number; rout
         </div>
         )}
         {error && <div className="err" style={{ fontSize: 12 }}>{error}</div>}
-        {data?.real && <Drafts tick={tick} />}
+        {data && (data.real || data.ready || data.waiting) && <Drafts tick={tick} />}
         {data?.real && !d && <div className="empty">Nothing is live on this account, so there are no numbers yet. Daily numbers appear once an ad set runs.</div>}
-        {data && !data.ready && !data.real && <div className="empty">The team is setting up the demo week.</div>}
+        {data && !data.ready && !data.real && (data.waiting
+          ? <div className="empty">No day has run yet. Run the first day from Settings, Simulation, and the numbers start here.</div>
+          : <div className="empty">The team is setting up the demo week.</div>)}
         {d && (
           <>
             {d.short && <div className="muted" style={{ fontSize: 12 }}>

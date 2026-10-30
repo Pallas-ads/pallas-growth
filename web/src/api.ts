@@ -77,7 +77,7 @@ export type CampaignRow = Metrics & { id: string; name: string; status: string; 
 export type Action = { n: number; day: number; who: Who; verb: string; text: string;
                        evidence: string[]; link: Link | null };
 type Which = { account: string; account_name: string; real: boolean };
-export type DashboardData = (Which & { ready: false }) | (Which & {
+export type DashboardData = (Which & { ready: false; waiting?: boolean }) | (Which & {
   ready: true; currency: string; days: number; start: number; end: number;
   short: boolean; pulled: { day: number | null; ts: string } | null; target: number;
   result_name: string; kpis: Kpi[];

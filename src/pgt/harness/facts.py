@@ -29,7 +29,9 @@ class FactStore:
             raise LookupError(f"Unknown fact version {version}")
         return SharedFacts.model_validate_json(row[0])
 
-    def set(self, facts: SharedFacts, actor: str) -> int:
+    def set(self, facts: SharedFacts, actor: str, setup: bool = False) -> int:
+        """Store a new version. `setup` marks values chosen while setting up, before the team
+        has run: recorded like any change, but not announced as one."""
         if actor not in {"user", "growth_lead"}:
             self._events.append("fact.rejected", actor, {"actor": actor})
             raise PermissionError(f"{actor} may not set shared facts")
@@ -46,6 +48,7 @@ class FactStore:
                 "INSERT INTO facts (version, content) VALUES (?, ?)",
                 (version, facts.model_dump_json()),
             )
-            self._events.append("fact.changed", actor, {"version": version, "changed": changed})
+            payload = {"version": version, "changed": changed} | ({"setup": True} if setup else {})
+            self._events.append("fact.changed", actor, payload)
             self._artifacts.mark_stale_for_facts(changed, version)
             return version

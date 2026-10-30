@@ -253,7 +253,8 @@ def _which(ws: Workspace) -> dict:
 def dashboard(ws: Workspace, account, days: int = 7) -> dict:
     facts = ws.facts.current()
     if account is None or account.day == 0:
-        return {"ready": False, **_which(ws)}
+        # `waiting`: the account is connected but no day has run yet (a cold start).
+        return {"ready": False, "waiting": account is not None, **_which(ws)}
     days = days if days in RANGES else 7
     end = account.day
     start = max(1, end - days + 1)
