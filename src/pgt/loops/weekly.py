@@ -466,7 +466,8 @@ async def produce_week(
         change_set_id=f"cs-w{week}",
         day=account.day,
         author="growth_lead",
-        summary=f"Create {len(passed)} new ad(s), PAUSED, for the week {week} tests.",
+        summary=(f"{len(passed)} new {'ad' if len(passed) == 1 else 'ads'}, created paused, "
+                 f"for the Week {week} tests."),
         changes=[],
         gate=[],
         ad_drafts=[

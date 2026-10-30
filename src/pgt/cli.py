@@ -2,6 +2,7 @@
 
 pgt simulate --days 7 [--live] [--provider meta|mixed] [--db path]
 pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/media]
+pgt serve [--port 8000] [--db path]   (web app on an offline demo workspace)
 
 --provider mixed runs the text roles on Muse Spark (open weights) on Baseten and keeps the
 Creative Strategist (hosted web search) and image work on the Meta API.
@@ -49,7 +50,14 @@ def main(argv: list[str] | None = None) -> None:
         help="Reasoning effort on Baseten (--provider mixed)",
     )
     week.add_argument("--yes", action="store_true", help="Approve both steps without asking")
+    serve = sub.add_parser("serve", help="Run the web app on an offline demo workspace")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--db", default=None, help="SQLite file (default: a new one in runs/web)")
+    serve.add_argument("--web", default="web/dist", help="Built frontend to serve, if present")
     args = parser.parse_args(argv)
+    if args.command == "serve":
+        return _serve(args)
     asyncio.run(_simulate(args) if args.command == "simulate" else _weekly(args))
 
 
@@ -76,6 +84,23 @@ def _models(args):
     model, fake = offline_model(args.model)
     print("Offline run: a rule-based stand-in answers instead of Muse (no cost).")
     return model, fake.client(), fake
+
+
+def _serve(args) -> None:
+    from datetime import datetime
+
+    import uvicorn
+
+    from pgt.api.app import create_app, offline_team
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = Path("runs/web") / stamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    db = args.db or str(run_dir / "workspace.db")
+    team = offline_team(db, str(run_dir / "media"))
+    print("Offline demo: a rule-based stand-in answers instead of Muse (no cost).")
+    print(f"Workspace {db}. Open http://{args.host}:{args.port}")
+    uvicorn.run(create_app(team, args.web), host=args.host, port=args.port, log_level="warning")
 
 
 def _ask(question: str, yes: bool) -> bool:
