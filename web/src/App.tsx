@@ -11,7 +11,7 @@ import { go, useRoute, type Route } from "./route";
 import Settings from "./Settings";
 import { OWNER } from "./ui";
 
-const MODE_LABEL = { offline: "Offline stand-in", live: "Live · Meta API", mixed: "Live · Baseten + Meta API" };
+const MODE_LABEL = { offline: "Offline stand-in", live: "Live · Meta API", mixed: "Live · Muse Spark Open" };
 
 function Sidebar({ route, waiting, mode, account }: { route: Route; waiting: number; mode?: Mode; account?: string }) {
   const page = route.page === "detail" ? "deliverables" : route.page;
@@ -42,6 +42,7 @@ function Sidebar({ route, waiting, mode, account }: { route: Route; waiting: num
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
           {TEAM.map((t) => <img key={t.code} className="av sm" src={`/avatars/${t.code}.svg`} alt={t.name} title={t.name} />)}
         </div>
+        <div className="mono faint" style={{ fontSize: 10.5 }}>Built with Muse Spark Open</div>
       </div>
       <div className="row" style={{ gap: 10, padding: "0 6px" }}>
         <img className="av" src="/owner.jpg" alt={OWNER} />

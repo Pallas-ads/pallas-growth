@@ -93,7 +93,7 @@ def offline_team(db: str, media_dir: str) -> Team:
 
 
 def live_team(
-    db: str, media_dir: str, model_name: str = "muse-spark-1.3", provider: str = "meta",
+    db: str, media_dir: str, model_name: str = "muse-spark-1.3", provider: str = "mixed",
     effort: str = "medium", cap: float = 5.0,
 ) -> Team:
     """A team on the real models. Every paid call is checked against `cap` (US dollars, at list

@@ -100,7 +100,7 @@ export default function Settings({ tick, busy, sidebar, route, access, onAccess 
 const MODE_TEXT = {
   offline: "Offline stand-in. No model is called; costs are what the same tokens would cost at list price.",
   live: "Live on the Meta API: Muse Spark for every text role, Muse Image and SAM 3.1 for creative.",
-  mixed: "Live, mixed: text roles on Muse Spark open weights on Baseten; web search, Muse Image and SAM 3.1 on the Meta API.",
+  mixed: "Live: every role on Muse Spark Open, the open-weights model, on Baseten. Web search, Muse Image and SAM 3.1 on the Meta API. Built with Muse Spark Open.",
 };
 
 function Usage({ data }: { data: SettingsData }) {
