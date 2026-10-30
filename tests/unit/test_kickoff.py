@@ -19,4 +19,4 @@ def test_nothing_live_with_drafts_points_at_ads_manager():
 def test_a_failed_draft_read_is_named():
     text = kickoff_text("Test", None, None, "rate limited", {"ad_sets": "graph"}, False)
     assert "through the Graph API" in text
-    assert "I could not read the drafts in Ads Manager: rate limited" in text
+    assert "I could not read the drafts in Ads Manager: rate limited. Next:" in text

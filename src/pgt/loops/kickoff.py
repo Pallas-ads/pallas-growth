@@ -47,7 +47,9 @@ def kickoff_text(name: str, state, drafts: list[dict] | None, draft_error: str |
             lines.append("Nothing is live: no active or paused ad sets.")
     counts = draft_counts(drafts or [])
     if draft_error:
-        lines.append(f"I could not read the drafts in Ads Manager: {draft_error}")
+        err = draft_error.strip()
+        lines.append(f"I could not read the drafts in Ads Manager: {err}"
+                     + ("" if err.endswith((".", "!", "?")) else "."))
     elif drafts:
         parts = [_plural(counts[k], k) for k in ("campaign", "ad set", "ad") if counts[k]]
         names = [d["name"] for d in drafts if d["name"]][:3]

@@ -338,3 +338,16 @@ def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
     assert not team.real and team.ws is sandbox_ws and team.account.day == sandbox_day
     assert client.get("/api/access").json()["reads"] is None
     assert client.get("/api/meta/mcp").status_code == 409
+
+
+def test_the_page_is_never_cached_but_assets_are_served(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<script src='/assets/index-x.js'></script>")
+    (dist / "assets" / "index-x.js").write_text("1")
+    team = offline_team(str(tmp_path / "w.db"), str(tmp_path / "media"))
+    with TestClient(create_app(team, dist)) as c:
+        page = c.get("/dashboard")
+        assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
+        assert c.get("/assets/index-x.js").text == "1"
+    team.ws.close()

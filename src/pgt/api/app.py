@@ -688,6 +688,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             file = (dist / path).resolve()
             if path and file.is_relative_to(dist.resolve()) and file.is_file():
                 return FileResponse(file)
-            return FileResponse(dist / "index.html")
+            # Never cache the page itself, so a rebuild shows up on the next load.
+            return FileResponse(dist / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
