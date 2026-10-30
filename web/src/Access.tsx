@@ -3,7 +3,7 @@
 // three. The public demo only offers the labelled sandbox; the real Facebook Login for Business
 // runs on facebook.com, from a local install.
 import { useEffect, useState } from "react";
-import { api, money, type AccessData, type Account, type FactsPatch, type Rules, type RulesPatch } from "./api";
+import { api, money, type AccessData, type Account, type FactsPatch, type Reads, type Rules, type RulesPatch } from "./api";
 import { go } from "./route";
 import { OWNER } from "./ui";
 
@@ -43,6 +43,11 @@ export function Connection({ a, onChange }: { a: AccessData; onChange: () => voi
               {real ? "Meta ad account. Data stays on this machine." : "Sandbox connection, synthetic data."}{" "}
               Connected by {c.by === "user" ? OWNER : c.by} on {date(c.ts)} · {c.currency} · {c.timezone}
             </div>
+            {a.reads && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 3 }} title={Object.values(a.reads.notes).join("\n")}>
+                {readsText(a.reads)}
+              </div>
+            )}
           </div>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn ghost xs" onClick={() => go("settings", { s: "connection", setup: 1 })}>Switch account</button>
@@ -369,6 +374,17 @@ export function Wizard({ a, start, onClose, onDone }: {
 
 const REAL_L2 = "New ads are created paused for you to turn on in Ads Manager. Pauses and budget "
   + "changes apply after your approval, within the house rules. The team never turns an ad on.";
+
+const READ_NAMES: Record<string, string> = { ad_sets: "ad sets", ads: "ads", lifetime: "lifetime totals", daily: "daily results" };
+
+function readsText(r: Reads): string {
+  if (!r.mcp) return "Reads through the Graph API. Writes through the Graph API after your approval.";
+  const graph = Object.entries(r.reads).filter(([, s]) => s === "graph").map(([k]) => READ_NAMES[k] ?? k);
+  const reads = !Object.keys(r.reads).length ? "Reads through the Meta Ads MCP, with the Graph API as the fallback."
+    : graph.length ? `Reads through the Meta Ads MCP; the Graph API answered ${graph.join(", ")}.`
+    : "Reads through the Meta Ads MCP.";
+  return `${reads} Writes through the Graph API after your approval.`;
+}
 
 function levelText(l: { level: number; text: string }, real: boolean): string {
   return real && l.level === 2 ? REAL_L2 : l.text;

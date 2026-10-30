@@ -125,7 +125,10 @@ export type AccessData = {
   sandbox: Account; public: boolean; meta_login: string | null; meta_accounts: Account[];
   rules: Rules; presets: Record<string, Partial<Rules>>; weekly_budget: number;
   weekly_test_budget: number; constraints: string[]; fact_version: number;
+  reads: Reads | null;
 };
+/** Which source answered each read on a real account: the Meta Ads MCP or the Graph API. */
+export type Reads = { mcp: boolean; reads: Record<string, "mcp" | "graph">; notes: Record<string, string> };
 export type FactsPatch = { weekly_budget?: number; test_budget_share?: number; target_cost_per_result?: number };
 export type RulesPatch = Partial<Omit<Rules, "check_time">>;
 
