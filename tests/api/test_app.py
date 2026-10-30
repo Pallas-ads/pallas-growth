@@ -142,6 +142,16 @@ def test_messages_and_deliverables_name_their_models(client):
     assert d["made_with"]["models"][0]["model"] == "muse-spark-1.3"
 
 
+def test_room_shows_every_dollar_of_model_spend_once(client):
+    items = client.get("/api/room").json()["items"]
+    plan_msg = next(i for i in items if i["kind"] == "msg" and i["mention"])
+    assert plan_msg["cost"] > 0
+    folds = [i for i in items if i["kind"] == "fold" and i["cost"]]
+    assert folds and all(f["models"] for f in folds)
+    shown = sum(i.get("cost") or 0 for i in items if i["kind"] in ("msg", "fold"))
+    assert shown == pytest.approx(client.get("/api/settings").json()["cost"], abs=1e-3)
+
+
 def test_dashboard_sums_the_insight_rows_and_pins_team_actions(client):
     d = client.get("/api/dashboard").json()
     assert d["ready"] and (d["start"], d["end"]) == (1, 7)
@@ -397,6 +407,8 @@ def test_store_template_seeds_two_weeks_with_revenue(tmp_path):
         # Week 1 was approved by the simulated owner, so its ads exist, paused.
         made = [a for a in c.get("/api/assets").json()["items"] if a["kind"] == "made"]
         assert made
+        assert made[0]["steps"][1]["title"] == "Cut out the dog harness"
+        assert made[0]["steps"][0]["sub"].startswith("Studio photo")
         board = c.get("/api/dashboard").json()
         assert board["account_name"] == "Northpaw Supply sandbox"
         keys = [k["key"] for k in board["kpis"]]

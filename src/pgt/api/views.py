@@ -91,6 +91,7 @@ class Index:
     returned: dict[str, Event] = field(default_factory=dict)  # key -> latest send-back
     simulated: set[int] = field(default_factory=set)  # grant ids that a simulated user made
     models: dict[tuple[str | None, str], list[str]] = field(default_factory=dict)  # (loop, role)
+    spend: dict[tuple[str | None, str], float] = field(default_factory=dict)  # (loop, role)
 
     @classmethod
     def build(cls, ws: Workspace) -> Index:
@@ -115,10 +116,13 @@ class Index:
                 idx.applied[e.refs[0]] = e
             elif e.type == "approval.returned":
                 idx.returned[p["key"]] = e
-            elif e.type == "model.call" and p.get("ok", True):
-                names = idx.models.setdefault((e.loop_id, p["role"]), [])
-                if p["model"] not in names:
-                    names.append(p["model"])
+            elif e.type == "model.call":
+                at = (e.loop_id, p["role"])
+                idx.spend[at] = idx.spend.get(at, 0.0) + p.get("cost", 0.0)  # failed calls cost too
+                if p.get("ok", True):
+                    names = idx.models.setdefault(at, [])
+                    if p["model"] not in names:
+                        names.append(p["model"])
         return idx
 
     def valid_grant(self, record: ArtifactRecord) -> Event | None:
@@ -314,7 +318,8 @@ def _fold(lines: list[dict], loop_id: str | None) -> dict:
         tail = "traded questions and answers"
     else:
         tail = f"posted {_plural(len(lines), 'update')}"
-    return {"kind": "fold", "id": lines[0]["id"], "ids": [line["id"] for line in lines],
+    return {"kind": "fold", "id": lines[0]["id"], "loop_id": loop_id,
+            "ids": [line["id"] for line in lines],
             "actors": [role(a) for a in actors], "names": names, "tail": tail,
             "ts_from": lines[0]["ts"], "ts_to": lines[-1]["ts"], "sim_day": lines[0]["sim_day"],
             "items": lines}
@@ -528,9 +533,23 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
                      "loop": e.loop_id,
                      "who": role(line[0]), "text": line[1]})
     flush()
+    # Each role's spend in a loop shows once: on its own message if it posted one, else on the
+    # first fold it appears in.
+    shown: set[tuple[str | None, str]] = set()
     for it in items:
         if it["kind"] == "msg":
-            it["models"] = idx.models.get((it.pop("loop_id"), it["who"]["actor"]), [])
+            at = (it.pop("loop_id"), it["who"]["actor"])
+            it["models"] = idx.models.get(at, [])
+            it["cost"] = None if at in shown else idx.spend.get(at)
+            shown.add(at)
+    for it in items:
+        if it["kind"] == "fold":
+            loop = it.pop("loop_id")
+            mine = [(loop, a["actor"]) for a in it["actors"]
+                    if (loop, a["actor"]) in idx.spend and (loop, a["actor"]) not in shown]
+            shown.update(mine)
+            it["models"] = list(dict.fromkeys(m for at in mine for m in idx.models.get(at, [])))
+            it["cost"] = round(sum(idx.spend[at] for at in mine), 6) if mine else None
     return items
 
 
