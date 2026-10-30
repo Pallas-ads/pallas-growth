@@ -26,11 +26,12 @@ export type Line = { id: number; ts: string; sim_day: number | null; type: strin
 
 export type Msg = {
   kind: "msg"; id: number; ts: string; sim_day: number | null; who: Who; text: string;
-  mention: boolean; card: Card | null; replies: Reply[]; models?: string[];
+  mention: boolean; card: Card | null; replies: Reply[]; models?: string[]; cost?: number | null;
 };
 export type Fold = {
   kind: "fold"; id: number; ids: number[]; actors: Who[]; names: string[]; tail: string;
   ts_from: string; ts_to: string; sim_day: number | null; items: Line[];
+  models?: string[]; cost?: number | null;
 };
 export type DayDiv = { kind: "day"; id: number; label: string; sim_day: number | null };
 export type RoomItem = Msg | Fold | DayDiv;
@@ -145,6 +146,12 @@ export function modelLabel(models: string[] | undefined, mode: Mode | undefined)
   if (!models?.length) return "";
   const names = models.map((m) => m.replace(/^meta-models\//, "")).join(" + ");
   return mode === "offline" ? `${names}, offline stand-in` : names;
+}
+
+/** Model spend for one message or fold, e.g. "$0.004". */
+export function costLabel(cost: number | null | undefined): string {
+  if (cost == null) return "";
+  return cost > 0 && cost < 0.001 ? "<$0.001" : `$${cost.toFixed(3)}`;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

@@ -402,10 +402,13 @@ def _made(ws, idx, account, media_dir, record, plans, facts) -> dict:
     shot = Path(media_dir) / week / "product_shot.png"
     creatives_in_week = len({r.key for r in ws.artifacts.list(kind="CreativeSet")
                              if r.key.startswith(f"{week}/creative/")})
+    scenario = getattr(account, "scenario", None)
+    what = scenario.product_concept if scenario else "phone"
+    photo = ("Studio photo made once with Muse Image for this synthetic store"
+             if scenario and scenario.product_photo else "Synthetic stand-in for an uploaded photo")
     steps = [
-        {"title": "Product photo", "sub": "Synthetic stand-in for an uploaded photo",
-         "model": None, "final": False},
-        {"title": "Cut out the phone", "model": sam, "final": False,
+        {"title": "Product photo", "sub": photo, "model": None, "final": False},
+        {"title": f"Cut out the {what}", "model": sam, "final": False,
          "sub": f"Once for {period(record.key)}, shared by {creatives_in_week} creatives"
          if creatives_in_week > 1 else "Once for the week"},
         {"title": f"Copy written, {len(versions)} {'draft' if len(versions) == 1 else 'drafts'}",

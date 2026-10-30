@@ -1,7 +1,7 @@
 // 4a Team Room: conversation only. Team-internal steps fold into one line; output arrives as
 // cards that open in Deliverables; a message's replies open in the thread on the right.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { clock, modelLabel, type Fold, type Mode, type Msg, type RoomItem } from "./api";
+import { clock, costLabel, modelLabel, type Fold, type Mode, type Msg, type RoomItem } from "./api";
 import Composer from "./Composer";
 import { go, type Route } from "./route";
 import { ArtCard, Av, Stack, Text } from "./ui";
@@ -22,12 +22,13 @@ function span(f: Fold) {
   return a === b ? a : `${a}–${b}`;
 }
 
-function FoldRow({ f, open, onToggle }: { f: Fold; open: boolean; onToggle: () => void }) {
+function FoldRow({ f, open, onToggle, mode }: { f: Fold; open: boolean; onToggle: () => void; mode?: Mode }) {
   return (
     <>
       <button className="fold" id={`i-${f.id}`} onClick={onToggle} aria-expanded={open}>
         <Stack people={f.actors} />
         <span>{names(f.names)} {f.tail}</span>
+        {f.cost != null && <span className="cost" title={`Model calls: ${modelLabel(f.models, mode) || "none"}`}>{costLabel(f.cost)}</span>}
         <span className="t">{span(f)}</span>
         <span className="more">{open ? "Hide" : `${f.items.length} ${f.items.length === 1 ? "message" : "messages"}`}</span>
       </button>
@@ -61,13 +62,13 @@ function Thr({ m, open }: { m: Msg; open: boolean }) {
 
 function MsgRow({ m, open, flash, mode }: { m: Msg; open: boolean; flash: boolean; mode?: Mode }) {
   const cls = "msg2" + (open ? " open" : "") + (flash ? " flash" : "");
-  const model = modelLabel(m.models, mode);
+  const model = [modelLabel(m.models, mode), costLabel(m.cost)].filter(Boolean).join(" · ");
   return (
     <div className={cls} id={`i-${m.id}`}>
       <Av who={m.who} />
       <div>
         <div className="mh"><b>{m.who.name}</b>
-          {model && <span className="model" title="Model that wrote this">{model}</span>}
+          {model && <span className="model" title="Model that wrote this, and what this role's calls cost in this step">{model}</span>}
           <span className="t">{clock(m.ts)}</span></div>
         <div className="mb"><Text text={m.text} /></div>
         {m.card && <ArtCard card={m.card} />}
@@ -197,7 +198,7 @@ export default function Room({ items, where, busy, error, route, sidebar, mode }
             {shown.length === 0 && <div className="empty">{tab === "mentions" ? "Nobody has mentioned you yet." : busy === "Setting up the demo week" ? "The team is setting up the demo week." : "No messages yet. The team starts once an ad account is connected."}</div>}
             {shown.map((it) => {
               if (it.kind === "day") return <div className="daydiv" key={`d-${it.id}`}>{it.label}</div>;
-              if (it.kind === "fold") return <FoldRow key={`f-${it.id}`} f={it} open={openFolds.has(it.id)} onToggle={() => toggle(it.id)} />;
+              if (it.kind === "fold") return <FoldRow key={`f-${it.id}`} f={it} open={openFolds.has(it.id)} onToggle={() => toggle(it.id)} mode={mode} />;
               return <MsgRow key={`m-${it.id}`} m={it} open={it.id === threadId} flash={it.id === focus} mode={mode} />;
             })}
           </div>
