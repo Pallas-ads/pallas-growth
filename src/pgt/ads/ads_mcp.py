@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
+import string
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -159,6 +161,10 @@ _ARG_NAMES = {
     "filtering": ("filtering", "filters"),
     "limit": ("limit",),
 }
+# Optional arguments the official server documents, sent when its schema has them. Reads are
+# plain lookups: no added benchmarks, only the fields asked for.
+_EXTRAS = {"include_additional_context": False, "advertiser_job": "report_measure_or_look_up"}
+_MAX_PAGES = 50
 _ROW_KEYS = ("ad_entities", "data", "entities", "results", "rows", "items")
 _ALIASES = {"adset_id": ("ad_set_id",), "date_start": ("date", "day_start"),
             "effective_status": ("status",), "spend": ("amount_spent",)}
@@ -174,6 +180,14 @@ def _decoded(value):
     return value
 
 
+def _next_cursor(payload) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    paging = payload.get("pagination")
+    cursor = paging.get("next_cursor") if isinstance(paging, dict) else None
+    return cursor or payload.get("next_cursor") or None
+
+
 def _norm(word: str) -> str:
     return word.lower().replace("_", "").replace("-", "")
 
@@ -187,6 +201,9 @@ class McpReads:
         self._mcp = mcp
         self.account_id = account_id.removeprefix("act_")  # the MCP lists accounts without it
         self._result_action = result_action
+        # The server asks every call to carry one id per conversation (20 letters and digits).
+        alphabet = string.ascii_letters + string.digits
+        self._conversation = "".join(secrets.choice(alphabet) for _ in range(20))
 
     def tools(self) -> dict[str, dict]:
         return self._mcp.tools()
@@ -197,7 +214,7 @@ class McpReads:
             raise McpUnsupported(f"The Meta Ads MCP does not offer {ENTITIES_TOOL}")
         return tool.get("inputSchema") or {}
 
-    def _args(self, need: tuple[str, ...], **want) -> dict:
+    def _args(self, need: tuple[str, ...], purpose: str = "", **want) -> dict:
         schema = self._schema()
         props = schema.get("properties") or {}
         args, used = {}, set()
@@ -210,6 +227,13 @@ class McpReads:
                 continue
             args[name] = self._fit(props.get(name) or {}, value)
             used.add(name)
+        extras = {**_EXTRAS, "client_conversation_id": self._conversation}
+        if purpose:
+            extras["reporting_purpose"] = [purpose]
+        for name, value in extras.items():
+            if name in props:
+                args[name] = self._fit(props[name], value)
+                used.add(name)
         missing = [r for r in schema.get("required", []) if r not in used]
         if missing:
             raise McpUnsupported(f"{ENTITIES_TOOL} needs {', '.join(missing)}, which PGT "
@@ -235,7 +259,21 @@ class McpReads:
         return value
 
     def _rows(self, args: dict) -> list[dict]:
-        payload = self._mcp.call(ENTITIES_TOOL, args)
+        rows: list[dict] = []
+        can_page = "cursor" in (self._schema().get("properties") or {})
+        for _ in range(_MAX_PAGES):
+            payload = self._mcp.call(ENTITIES_TOOL, args)
+            rows += self._page(payload)
+            cursor = _next_cursor(payload)
+            if not cursor or not can_page:
+                return rows
+            if isinstance(payload, dict) and isinstance(payload.get("client_conversation_id"), str):
+                self._conversation = payload["client_conversation_id"]
+                args = {**args, "client_conversation_id": self._conversation}
+            args = {**args, "cursor": cursor}
+        raise McpError(f"{ENTITIES_TOOL} returned more than {_MAX_PAGES} pages")
+
+    def _page(self, payload) -> list[dict]:
         if isinstance(payload, dict):
             values = {k: _decoded(v) for k, v in payload.items()}
             found = next((values[k] for k in _ROW_KEYS if isinstance(values.get(k), list)),
@@ -285,7 +323,8 @@ class McpReads:
             raise McpError(f"{ENTITIES_TOOL} did not return results for {what}")
 
     def adsets(self) -> list[dict]:
-        args = self._args(("account", "level"), account=self.account_id, level="adset",
+        args = self._args(("account", "level"), "entity_lookup", account=self.account_id,
+                          level="adset",
                           fields=["id", "name", "status", "effective_status", "daily_budget",
                                   "lifetime_budget", "learning_stage_info", "campaign_id",
                                   "campaign"])
@@ -301,8 +340,8 @@ class McpReads:
         return rows
 
     def ads(self) -> list[dict]:
-        args = self._args(("account", "level"), account=self.account_id, level="ad",
-                          fields=["id", "name", "adset_id", "status", "created_time"])
+        args = self._args(("account", "level"), "entity_lookup", account=self.account_id,
+                          level="ad", fields=["id", "name", "adset_id", "status", "created_time"])
         rows = self._rows(args)
         for r in rows:
             r.setdefault("status", r.get("effective_status"))
@@ -310,7 +349,8 @@ class McpReads:
         return rows
 
     def lifetime(self) -> list[dict]:
-        args = self._args(("account", "level", "date_preset"), account=self.account_id,
+        args = self._args(("account", "level", "date_preset"), "metric_lookup",
+                          account=self.account_id,
                           level="ad", date_preset="maximum", fields=["ad_id", "spend", "actions"])
         rows = self._rows(args)
         for r in rows:
@@ -321,7 +361,7 @@ class McpReads:
 
     def daily(self, since: str, until: str) -> list[dict]:
         args = self._args(("account", "level", "time_range", "time_increment"),
-                          account=self.account_id, level="ad",
+                          "metric_lookup", account=self.account_id, level="ad",
                           time_range={"since": since, "until": until}, time_increment=1,
                           fields=["ad_id", "adset_id", "spend", "impressions", "reach", "clicks",
                                   "actions"])
