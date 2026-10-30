@@ -13,7 +13,12 @@ from io import BytesIO
 
 from PIL import Image
 
-from pgt.creative.compose import make_demo_product_shot, offline_background, png_bytes
+from pgt.creative.compose import (
+    make_demo_product_shot,
+    offline_background,
+    png_bytes,
+    product_box,
+)
 from pgt.llm.fake import FunctionCall, MetaFake, RawText, Searched, output_name, prompt_inputs
 from pgt.llm.meta import DEFAULT_MODEL, SAM_MODEL, responses_model
 from pgt.roles.metrics import expected_readout
@@ -42,17 +47,20 @@ def offline_responder(body: dict):
         return _segment(body)
     inputs = prompt_inputs(body)
     name = output_name(body)
+    flavor = STORE if _sells_online(body) else APP
     weekly = {
         "WeeklyBrief": _weekly_brief,
-        "MarketResearch": _research,
-        "TestPlanDraft": _plan,
         "Answer": _answer,
         "CreativeReview": _creative_review,
     }
     if name in weekly:
         return weekly[name](inputs)
+    if name == "MarketResearch":
+        return _research(inputs, flavor)
+    if name == "TestPlanDraft":
+        return _plan(inputs, flavor)
     if name == "CreativeCopy":
-        return _creative_copy(inputs, tool_outputs(body))
+        return _creative_copy(inputs, tool_outputs(body), flavor)
     props = set(body.get("text", {}).get("format", {}).get("schema", {}).get("properties", {}))
     if name == "TestReadout" or "recommendation" in props:
         return _readout(inputs)
@@ -180,16 +188,27 @@ def tool_outputs(body: dict) -> list[dict]:
     return outputs
 
 
+def _sells_online(body: dict) -> bool:
+    """The facts in the system prompt say the business counts purchases: an online store."""
+    return '\\"result_name\\": \\"purchase\\"' in json.dumps(body)
+
+
 def _segment(body: dict) -> RawText:
-    """SAM 3.1 stand-in: finds the phone in the demo product shot."""
-    width = 1600
+    """SAM 3.1 stand-in: the phone in the demo product shot, or the product in a studio photo."""
+    image, concept = None, "phone"
     for item in body.get("input", []):
         for part in item.get("content", []) if isinstance(item, dict) else []:
-            url = part.get("image_url", "") if isinstance(part, dict) else ""
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "input_text":
+                concept = part.get("text", concept)
+            url = part.get("image_url", "")
             if url.startswith("data:image/"):
-                data = base64.b64decode(url.split(",", 1)[1])
-                width = Image.open(BytesIO(data)).width
-    _, box = make_demo_product_shot(width)
+                image = Image.open(BytesIO(base64.b64decode(url.split(",", 1)[1])))
+    if image is not None and concept != "phone":
+        box = product_box(image)
+    else:
+        _, box = make_demo_product_shot(image.width if image is not None else 1600)
     return RawText(
         f"<0f>0<|box;x1={box.x1};y1={box.y1};x2={box.x2};y2={box.y2};w={box.w};h={box.h}|>"
     )
@@ -212,6 +231,24 @@ def _weekly_brief(inputs: dict) -> WeeklyBrief:
     )
 
 
+APP = {
+    "query": "fitness app ads",
+    "angles": ("Time saved", "Habit streak"),
+    "key_message": "Short home workouts you can keep up.",
+    "primary_text": "Short home workouts that fit your day. Keep your streak going.",
+    "description": "Start your free trial",
+    "scene": "A calm, bright living room with open floor space",
+}
+STORE = {
+    "query": "pet supply ads",
+    "angles": ("Real walks", "Calmer walks"),
+    "key_message": "A no-pull harness that makes the daily walk easier.",
+    "primary_text": "Our no-pull harness spreads the pull across the chest, so the daily walk "
+                    "feels easy for both of you. Free shipping over $50.",
+    "description": "Shop the harness",
+    "scene": "A leafy park path in soft morning light, open ground in the middle",
+}
+
 OFFLINE_INSIGHTS = [
     (
         "Home workout apps lead with short sessions that fit a busy day.",
@@ -233,8 +270,29 @@ OFFLINE_INSIGHTS = [
     ),
 ]
 
+STORE_INSIGHTS = [
+    (
+        "Pet brands that show their product in real use lead over plain studio shots.",
+        "Real walks",
+        "Made for the daily walk",
+        "real-use",
+    ),
+    (
+        "Calm, no-pull and quiet-pump benefits are what owners mention most in reviews.",
+        "Calmer walks",
+        "Calmer walks start here",
+        "calm-benefits",
+    ),
+    (
+        "Gift sets and free-shipping thresholds show up across pet store ads before the holidays.",
+        "Gift ready",
+        "The gift they will use every day",
+        "gift-sets",
+    ),
+]
 
-def _research(inputs: dict) -> Searched:
+
+def _research(inputs: dict, flavor: dict = APP) -> Searched:
     insights = [
         MarketInsight(
             claim=claim,
@@ -247,16 +305,16 @@ def _research(inputs: dict) -> Searched:
                 )
             ],
         )
-        for claim, angle, hook, slug in OFFLINE_INSIGHTS
+        for claim, angle, hook, slug in (STORE_INSIGHTS if flavor is STORE else OFFLINE_INSIGHTS)
     ]
     return Searched(
         output=MarketResearch(insights=insights),
-        queries=[f"fitness app ads {focus}" for focus in inputs.get("focus", [])[:2]],
+        queries=[f"{flavor['query']} {focus}" for focus in inputs.get("focus", [])[:2]],
         sources=[(s.title, s.url) for i in insights for s in i.sources],
     )
 
 
-def _plan(inputs: dict) -> TestPlanDraft:
+def _plan(inputs: dict, flavor: dict = APP) -> TestPlanDraft:
     account = inputs["account"]
     ads = {a["ad_id"]: a for a in account["ads"]}
     active = [c for c in account["campaigns"] if c["status"] == "ACTIVE"]
@@ -271,15 +329,17 @@ def _plan(inputs: dict) -> TestPlanDraft:
         ad = ads.get(f["subject_id"])
         if ad and f["severity"] == "act":
             campaign_id, replaces = ad["campaign_id"], ad["ad_id"]
-            name, angle = "Fresh hook for a tired ad", "Time saved"
+            name, angle = "Fresh hook for a tired ad", flavor["angles"][0]
         elif f["subject_id"] in by_test:
             campaign_id, replaces = by_test[f["subject_id"]]["campaign_id"], None
-            name, angle = "Build on the winning test", "Habit streak"
+            name, angle = "Build on the winning test", flavor["angles"][1]
         else:
             continue
         if campaign_id not in {c["campaign_id"] for c in active}:
             continue
         seen.add(f["subject_id"])
+        if any(t.name == name for t in tests):  # two tired ads: name each test after its ad
+            name = f"{name}: {ad['name'] if ad else f['subject_id']}"
         insight = insight_ids[len(tests) % len(insight_ids)]
         hook = inputs["insights"][insight]["hook"]
         tests.append(
@@ -294,17 +354,39 @@ def _plan(inputs: dict) -> TestPlanDraft:
                 brief=CreativeBrief(
                     angle=angle,
                     hook=hook,
-                    key_message="Short home workouts you can keep up.",
+                    key_message=flavor["key_message"],
                     insight_ids=[insight],
                     replaces_ad_id=replaces,
                 ),
             )
         )
+    if len(tests) == 1 and findings:
+        # Only one finding to act on: also try a fresh angle where most of the budget runs.
+        main = max(active, key=lambda c: c.get("daily_budget", 0))
+        insight = insight_ids[1 % len(insight_ids)]
+        tests.append(PlannedTest(
+            name="Try a fresh angle",
+            hypothesis=f"A new {flavor['angles'][1].lower()} creative lowers cost per result.",
+            campaign_id=main["campaign_id"],
+            budget_weight=2,
+            metric="cost_per_result",
+            stop_rule="Stop after 7 days, or at 3x target spend with no result.",
+            evidence_ids=findings[0]["evidence_ids"],
+            brief=CreativeBrief(
+                angle=flavor["angles"][1],
+                hook=inputs["insights"][insight]["hook"],
+                key_message=flavor["key_message"],
+                insight_ids=[insight],
+                replaces_ad_id=None,
+            ),
+        ))
     summary = _revised(inputs, "Two creative tests drawn from this week's findings.")
     return TestPlanDraft(summary=summary, tests=tests)
 
 
-def _creative_copy(inputs: dict, outputs: list[dict]) -> CreativeCopy | FunctionCall:
+def _creative_copy(
+    inputs: dict, outputs: list[dict], flavor: dict = APP
+) -> CreativeCopy | FunctionCall:
     test = inputs["test"]
     if not outputs:
         return FunctionCall(
@@ -319,10 +401,10 @@ def _creative_copy(inputs: dict, outputs: list[dict]) -> CreativeCopy | Function
         # A rule-based stand-in cannot read the note; it switches to the key message so the
         # redo is visibly a new version. Muse Spark reads the note in live runs.
         headline=(brief["key_message"] if redo else brief["hook"])[:40],
-        primary_text="Short home workouts that fit your day. Keep your streak going.",
-        description="Start your free trial",
+        primary_text=flavor["primary_text"],
+        description=flavor["description"],
         claims=[Claim(text=brief["key_message"], evidence_ids=evidence_ids, source_urls=[])],
-        image_prompt=f"A calm, bright living room with open floor space, mood: {brief['angle']}",
+        image_prompt=f"{flavor['scene']}, mood: {brief['angle']}",
     )
 
 

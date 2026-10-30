@@ -66,10 +66,11 @@ export type Detail = Deliverable & {
 
 /** Dashboard: Insights-shaped rows from the sandbox, plus what the team did. */
 export type Link = { key: string; title: string };
-export type Kpi = { key: string; label: string; value: number | null; fmt: "money" | "int" | "pct";
+export type Kpi = { key: string; label: string; value: number | null; fmt: "money" | "int" | "pct" | "ratio";
                     sub: string; tone: "" | "good" | "bad"; formula: string; hero?: boolean };
 export type Metrics = { spend: number; impressions: number; clicks: number; results: number;
-                        ctr: number | null; cpr: number | null; tone: "" | "under" | "over" };
+                        ctr: number | null; cpr: number | null; tone: "" | "under" | "over";
+                        revenue: number | null; roas: number | null };
 export type AdRow = Metrics & { id: string; name: string; status: string; status_label: string;
                                 waits: boolean; evidence: string | null };
 export type CampaignRow = Metrics & { id: string; name: string; status: string; status_label: string;
@@ -122,7 +123,7 @@ export type SettingsData = {
 
 /** Which ad account the team works on, how much it may do, and the house rules. */
 export type Account = { kind: "sandbox" | "meta"; account_id: string; name: string; currency: string;
-                        timezone: string };
+                        timezone: string; blurb?: string };
 export type Rules = { preset: string; daily_budget_cap: number; max_budget_change_pct: number;
   min_days_between_budget_changes: number; min_spend_multiple_before_pause: number;
   protect_learning_phase: boolean; check_time: string };
@@ -162,7 +163,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => call<AppStatus>("/api/status"),
   room: () => call<{ where: string; items: RoomItem[] }>("/api/room"),
-  deliverables: () => call<{ items: Deliverable[] }>("/api/deliverables"),
+  deliverables: () => call<{ items: Deliverable[]; account_name: string }>("/api/deliverables"),
   detail: (key: string) => call<Detail>(`/api/deliverables/${key}`),
   approve: (key: string) => call(`/api/approve/${key}`, { method: "POST" }),
   sendBack: (key: string, note: string) =>
@@ -185,7 +186,7 @@ export const api = {
     call<{ fact_version: number; refresh: boolean }>("/api/facts", { method: "POST", body: JSON.stringify(patch) }),
   dashboard: (days: number) => call<DashboardData>(`/api/dashboard?days=${days}`),
   drafts: () => call<Drafts>("/api/drafts"),
-  assets: () => call<{ items: Asset[]; account: string }>("/api/assets"),
+  assets: () => call<{ items: Asset[] } & Which>("/api/assets"),
   upload: async (file: File) => {
     const res = await fetch(`/api/assets/upload?name=${encodeURIComponent(file.name)}`,
                             { method: "POST", body: file });

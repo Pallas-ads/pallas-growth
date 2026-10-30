@@ -321,7 +321,7 @@ def _fold(lines: list[dict], loop_id: str | None) -> dict:
 
 
 SETTING_EVENTS = {"access.level", "account.connected", "account.disconnected",
-                  "changeset.handed_off", "fact.changed", "refresh.done"}
+                  "changeset.handed_off", "fact.changed", "refresh.done", "ads.turned_on"}
 LEVEL_TEXT = {
     0: "The team reads and reports, and asks me for nothing.",
     1: "Approved changes come back to me to apply in Ads Manager.",
@@ -354,6 +354,9 @@ def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict
                          "stale until the team re-checks it."), None
     if e.type == "refresh.done":
         return "growth_lead", " ".join(p.get("lines", [])), None
+    if e.type == "ads.turned_on":
+        ads = " and ".join(f"{p.get('names', {}).get(a, a)} ({a})" for a in p.get("ad_ids", []))
+        return "system", f"Simulated owner turned on {ads} in Ads Manager.", None
     return None
 
 
@@ -464,8 +467,10 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
             name = title(record) if record else p["key"]
             if e.id in idx.simulated:
                 n = len(p.get("approved", []))
-                add(_msg(e, "system", f"Simulated approval: approved {_plural(n, 'change')} in "
-                         f"{name}, only the ones the house rules allowed."))
+                text = (f"Simulated approval: approved {_plural(n, 'change')} in {name}, only "
+                        "the ones the house rules allowed.") if n else \
+                    f"Simulated approval: approved {name}."
+                add(_msg(e, "system", text))
             else:
                 reply(roots.get(p["key"]), e, "user", f"Approved {name}.")
             continue

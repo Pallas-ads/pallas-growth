@@ -22,11 +22,14 @@ def _money(value: float) -> str:
 
 
 def _sum(rows) -> dict:
+    values = [r.purchase_value for r in rows if r.purchase_value is not None]
     return {
         "spend": round(sum(r.spend for r in rows), 2),
         "impressions": sum(r.impressions for r in rows),
         "clicks": sum(r.clicks for r in rows),
         "results": sum(r.results for r in rows),
+        # Only accounts that track purchase value have revenue; None keeps ROAS off the board.
+        "revenue": round(sum(values), 2) if values else None,
     }
 
 
@@ -37,6 +40,7 @@ def _ratios(t: dict) -> dict:
         "cpc": spend / clicks if clicks else None,
         "cpm": spend / imp * 1000 if imp else None,
         "cpr": spend / results if results else None,
+        "roas": t["revenue"] / spend if t["revenue"] is not None and spend else None,
     }
 
 
@@ -46,7 +50,7 @@ def _metrics(rows, target: float) -> dict:
     tone = ""
     if r["cpr"] is not None:
         tone = "under" if r["cpr"] <= target else "over"
-    return {**t, "ctr": r["ctr"], "cpr": r["cpr"], "tone": tone}
+    return {**t, "ctr": r["ctr"], "cpr": r["cpr"], "roas": r["roas"], "tone": tone}
 
 
 def _change(a: float | None, b: float | None) -> float | None:
@@ -85,6 +89,8 @@ def _kpis(rows, prior, ndays: int, facts) -> list[dict]:
     ctr_sub, ctr_tone = delta(r["ctr"], pr and pr["ctr"], True, "pt")
     cpm_sub, cpm_tone = delta(r["cpm"], pr and pr["cpm"], False)
     res_sub, res_tone = delta(t["results"], p and p["results"], True, "count")
+    rev_sub, rev_tone = delta(t["revenue"], p and p["revenue"], True)
+    roas_sub, roas_tone = delta(r["roas"], pr and pr["roas"], True)
     cpr = r["cpr"]
     if cpr is None:
         hero_sub, hero_tone = f"no {name}s yet", ""
@@ -92,7 +98,7 @@ def _kpis(rows, prior, ndays: int, facts) -> list[dict]:
         hero_sub, hero_tone = f"{_money(target - cpr)} under target", "good"
     else:
         hero_sub, hero_tone = f"{_money(cpr - target)} over target", "bad"
-    return [
+    tiles = [
         {"key": "spend", "label": "Spend", "value": t["spend"], "fmt": "money",
          "sub": f"{_money(per_day)}/day, cap {_money(cap)}", "tone": "", "formula": "sum of spend"},
         {"key": "impressions", "label": "Impressions", "value": t["impressions"], "fmt": "int",
@@ -111,6 +117,18 @@ def _kpis(rows, prior, ndays: int, facts) -> list[dict]:
         {"key": "cpr", "label": f"Cost per {name}", "value": cpr, "fmt": "money",
          "sub": hero_sub, "tone": hero_tone, "hero": True, "formula": f"spend / {name}s"},
     ]
+    if t["revenue"] is None:
+        return tiles
+    # A store that tracks purchase value: revenue and ROAS take the places of impressions and CPC.
+    money = [
+        {"key": "revenue", "label": "Revenue", "value": t["revenue"], "fmt": "money",
+         "sub": rev_sub or "purchase value", "tone": rev_tone, "formula": "sum of purchase value"},
+        {"key": "roas", "label": "ROAS", "value": r["roas"], "fmt": "ratio",
+         "sub": roas_sub or "revenue per $1 spent", "tone": roas_tone,
+         "formula": "purchase value / spend"},
+    ]
+    keep = [k for k in tiles if k["key"] not in {"impressions", "cpc"}]
+    return keep[:1] + money + keep[1:]
 
 
 def _ad_names(account) -> dict[str, str]:
@@ -240,21 +258,23 @@ def _table(account, rows, target: float) -> list[dict]:
     return out
 
 
-def _which(ws: Workspace) -> dict:
+def _which(ws: Workspace, account=None) -> dict:
     """The connected account as the dashboard names it: the sandbox unless a real one is in use."""
     from pgt.harness import access
 
     conn = access.connection(ws) or {}
     if conn.get("kind") == "meta":
         return {"account": conn.get("account_id"), "account_name": conn.get("name"), "real": True}
-    return {"account": SANDBOX_ACCOUNT, "account_name": access.SANDBOX["name"], "real": False}
+    scenario = getattr(account, "scenario", None)
+    name = scenario.name if scenario is not None else access.SANDBOX["name"]
+    return {"account": SANDBOX_ACCOUNT, "account_name": name, "real": False}
 
 
 def dashboard(ws: Workspace, account, days: int = 7) -> dict:
     facts = ws.facts.current()
     if account is None or account.day == 0:
         # `waiting`: the account is connected but no day has run yet (a cold start).
-        return {"ready": False, "waiting": account is not None, **_which(ws)}
+        return {"ready": False, "waiting": account is not None, **_which(ws, account)}
     days = days if days in RANGES else 7
     end = account.day
     start = max(1, end - days + 1)
@@ -275,7 +295,7 @@ def dashboard(ws: Workspace, account, days: int = 7) -> dict:
     state = account.state()
     return {
         "ready": True,
-        **_which(ws),
+        **_which(ws, account),
         "currency": state.currency,
         "days": days,
         "start": start,
@@ -289,7 +309,9 @@ def dashboard(ws: Workspace, account, days: int = 7) -> dict:
             "rows": len(rows),
             "first": rows[0].evidence_id if rows else None,
             "last": rows[-1].evidence_id if rows else None,
-            "fields": "spend, impressions, clicks, results",
+            "fields": "spend, impressions, clicks, results"
+                      + (", purchase value" if any(r.purchase_value is not None for r in rows)
+                         else ""),
             "level": "ad",
             "used_in": {"key": used[-1].key, "title": title(used[-1])} if used else None,
         },
@@ -352,7 +374,9 @@ def _after(account, ad_id: str | None, target: float, result_name: str) -> tuple
         return "Not launched", False
     rows = account.insights(ad_ids=[ad_id]) if account else []
     if not rows:
-        return f"{ad_id}, paused, no delivery yet", False
+        ad = account.state().ad(ad_id) if account else None
+        state = "on" if ad and ad.status == "ACTIVE" else "paused"
+        return f"{ad_id}, {state}, no delivery yet", False
     m = _metrics(rows, target)
     cpr = f"{_money(m['cpr'])}/{result_name}" if m["cpr"] is not None else f"no {result_name}s"
     return f"CTR {m['ctr']:.2%} · {cpr}", m["tone"] == "over"
@@ -446,12 +470,19 @@ def assets(ws: Workspace, account, media_dir: str) -> dict:
     items = [_made(ws, idx, account, media_dir, r, plans, facts) for r in latest.values()]
     items.sort(key=lambda a: (a["week"], a["updated"] or ""), reverse=True)
     root = Path(media_dir)
+    scenario = getattr(account, "scenario", None)
+    if scenario is not None and scenario.product_photo:
+        what = scenario.product_concept
+        hook = (f"Studio photo of the {what}, made once with Muse Image for this synthetic store. "
+                f"SAM 3.1 cuts the {what} out of it, so every ad shows the real product.")
+    else:
+        hook = "Synthetic phone mock-up drawn in code. SAM 3.1 cuts the phone out of it."
     for shot in sorted(root.glob("week*/product_shot.png"), reverse=True) if root.is_dir() else []:
         week = shot.parent.name
         used = [a["test_id"] for a in items if a["id"].startswith(f"{week}/")]
         items.append({
             "id": f"{week}/product_shot", "kind": "source", "title": "Product photo",
-            "hook": "Synthetic phone mock-up drawn in code. SAM 3.1 cuts the phone out of it.",
+            "hook": hook,
             "test_id": None, "week": period(f"{week}/x"), "status": "src",
             "status_label": "Source", "image": _media_url(str(shot), media_dir), "images": [],
             "models": [], "after": "Used by " + ", ".join(used) if used else "Not used yet",
@@ -472,4 +503,4 @@ def assets(ws: Workspace, account, media_dir: str) -> dict:
             "used_in": None, "deliverable": None, "source": None, "version": 1,
             "updated": e.ts,
         })
-    return {"items": items, "account": SANDBOX_ACCOUNT}
+    return {"items": items, **_which(ws, account)}

@@ -46,7 +46,7 @@ from pgt.roles.operator import apply_change_set
 from pgt.roles.producer import run_producer
 from pgt.roles.reviewer import review_creative, review_findings
 from pgt.roles.strategist import run_research
-from pgt.sandbox import SandboxAccount
+from pgt.sandbox import SandboxAccount, product_photo
 from pgt.schemas import (
     CREATIVE_SIZES,
     AdDraft,
@@ -426,11 +426,15 @@ async def produce_week(
     media_dir = Path(media_dir) / f"week{week}"
     product = None
     if note or any(_reusable(ws, week, t.test_id) is None for t in plan.tests):
+        scenario = getattr(account, "scenario", None)
+        concept = scenario.product_concept if scenario else "phone"
+        if product_shot is None and scenario is not None:
+            product_shot = product_photo(scenario)
         if product_shot is None:
             product_shot, _ = make_demo_product_shot()
         save_png(product_shot, media_dir / "product_shot.png")
         try:
-            boxes = await media.segment(scope, "producer", product_shot, "phone")
+            boxes = await media.segment(scope, "producer", product_shot, concept)
         except ValueError:
             escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
             return _summary(scope, week, "escalated", plan_id=plan.plan_id)

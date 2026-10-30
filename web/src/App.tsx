@@ -79,7 +79,7 @@ export default function App() {
   ) : null;
 
   let page: ReactNode;
-  if (route.page === "deliverables") page = <Deliverables items={items} route={route} sidebar={sidebar} />;
+  if (route.page === "deliverables") page = <Deliverables items={items} accountName={list.data?.account_name} route={route} sidebar={sidebar} />;
   else if (route.page === "detail") {
     const d = detail.data && detail.data.key === route.key ? detail.data : null;
     page = <Detail d={d} error={detail.error} sidebar={sidebar} onChange={() => undefined} mode={mode} />;

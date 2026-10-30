@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from pgt.schemas.weekly import CREATIVE_SIZES
 
@@ -74,6 +74,27 @@ def cutout(image: Image.Image, box: Box, radius_ratio: float = 0.08) -> Image.Im
     )
     product.putalpha(mask)
     return product
+
+
+def product_box(image: Image.Image, threshold: int = 40) -> Box:
+    """Where the product sits in a studio photo: everything that differs from the border colour.
+
+    Only the offline SAM stand-in uses this; live runs ask SAM 3.1.
+    """
+    rgb = image.convert("RGB")
+    small = rgb.resize((256, round(256 * rgb.height / rgb.width)))
+    w, h = small.size
+    border = [small.getpixel((x, y)) for x in range(w) for y in (0, h - 1)] + \
+             [small.getpixel((x, y)) for y in range(h) for x in (0, w - 1)]
+    bg = tuple(sorted(c[i] for c in border)[len(border) // 2] for i in range(3))
+    r, g, b = ImageChops.difference(small, Image.new("RGB", small.size, bg)).split()
+    diff = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    mask = diff.point(lambda v: 255 if v > threshold else 0).filter(ImageFilter.MedianFilter(5))
+    found = mask.getbbox() or (0, 0, w, h)
+    sx, sy = rgb.width / w, rgb.height / h
+    x1, y1 = round(found[0] * sx), round(found[1] * sy)
+    x2, y2 = round(found[2] * sx), round(found[3] * sy)
+    return Box(x1, y1, x2, y2, rgb.width, rgb.height)
 
 
 def make_demo_product_shot(size: int = 1600) -> tuple[Image.Image, Box]:

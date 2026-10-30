@@ -140,7 +140,7 @@ export default function Assets({ tick, route, sidebar, mode }: {
       <main className="col scroll top" style={{ padding: "18px 22px 16px 26px", gap: 12, minWidth: 0 }}>
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <div className="eyebrow">Pallas Fit sandbox · {made} {made === 1 ? "creative" : "creatives"} made</div>
+            <div className="eyebrow">{data?.account_name ?? "Sandbox"} · {made} {made === 1 ? "creative" : "creatives"} made</div>
             <div className="h1" style={{ marginTop: 4 }}>Creative Assets</div>
           </div>
           <div className="seg" role="tablist">

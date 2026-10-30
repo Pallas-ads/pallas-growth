@@ -384,3 +384,26 @@ def test_the_page_is_never_cached_but_assets_are_served(tmp_path):
         assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
         assert c.get("/assets/index-x.js").text == "1"
     team.ws.close()
+
+
+def test_store_template_seeds_two_weeks_with_revenue(tmp_path):
+    team = offline_team(str(tmp_path / "ws.db"), str(tmp_path / "media"))
+    team.template = "ecommerce"
+    with TestClient(create_app(team, seed_days=14)) as c:
+        _idle(c, 120)
+        waiting = _waiting(c)
+        assert [d["title"] for d in waiting] == ["Test plan · Week 2 · v1"]
+        assert team.account.day == 14
+        # Week 1 was approved by the simulated owner, so its ads exist, paused.
+        made = [a for a in c.get("/api/assets").json()["items"] if a["kind"] == "made"]
+        assert made
+        board = c.get("/api/dashboard").json()
+        assert board["account_name"] == "Northpaw Supply sandbox"
+        keys = [k["key"] for k in board["kpis"]]
+        assert keys == ["spend", "revenue", "roas", "ctr", "cpm", "results", "cpr"]
+        roas = next(k for k in board["kpis"] if k["key"] == "roas")["value"]
+        assert 1.5 < roas < 5
+        access = c.get("/api/access").json()
+        assert access["sandbox"]["name"] == "Northpaw Supply sandbox"
+        assert c.get("/api/deliverables").json()["account_name"] == "Northpaw Supply sandbox"
+    team.ws.close()

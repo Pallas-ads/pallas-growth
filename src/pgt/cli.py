@@ -1,9 +1,13 @@
 """Command-line entry points:
 
-pgt simulate --days 7 [--live] [--provider meta|mixed] [--db path]
-pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/media]
-pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5] [--public] [--cold]
-          [--ssl-certfile cert.pem --ssl-keyfile key.pem]
+pgt simulate --days 7 [--template app|ecommerce] [--live] [--provider meta|mixed] [--db path]
+pgt weekly [--template app|ecommerce] [--yes] [--live] [--provider meta|mixed] [--db path]
+           [--out runs/media]
+pgt serve [--template app|ecommerce] [--port 8000] [--db path] [--live] [--provider meta|mixed]
+          [--cap 5] [--public] [--cold] [--ssl-certfile cert.pem --ssl-keyfile key.pem]
+
+--template picks the synthetic business in the sandbox: "app" is Pallas Fit, a fitness app;
+"ecommerce" is Northpaw Supply, an online pet store with two weeks of history.
 
 Live runs default to --provider mixed: every role runs on Muse Spark Open (open weights) on
 Baseten, except the Creative Strategist's hosted web search and the image work (Muse Image,
@@ -75,6 +79,9 @@ def main(argv: list[str] | None = None) -> None:
         "--cap", type=float, default=5.0,
         help="Live runs stop before any call once this many dollars are spent (list price)",
     )
+    for p in (sim, week, serve):
+        p.add_argument("--template", choices=["app", "ecommerce"], default="app",
+                       help="Synthetic business in the sandbox")
     args = parser.parse_args(argv)
     if args.command == "serve":
         return _serve(args)
@@ -130,6 +137,7 @@ def _serve(args) -> None:
         team = offline_team(db, str(run_dir / "media"))
         print("Offline demo: a rule-based stand-in answers instead of Muse (no cost).")
     team.public = args.public
+    team.template = args.template
     cert = args.ssl_certfile or os.environ.get("PGT_TLS_CERT") or None
     key = args.ssl_keyfile or os.environ.get("PGT_TLS_KEY") or None
     if bool(cert) != bool(key):
@@ -137,8 +145,11 @@ def _serve(args) -> None:
     # Meta matches the login callback exactly, so open the address the callback was saved with.
     host = "localhost" if args.host in {"127.0.0.1", "localhost"} else args.host
     print(f"Workspace {db}. Open {'https' if cert else 'http'}://{host}:{args.port}")
-    uvicorn.run(create_app(team, args.web, seed_days=0 if args.cold else 7), host=args.host, port=args.port, log_level="warning",
-                ssl_certfile=cert, ssl_keyfile=key)
+    from pgt.sandbox import TEMPLATES
+
+    days = 0 if args.cold else 7 * TEMPLATES[args.template].history_weeks
+    uvicorn.run(create_app(team, args.web, seed_days=days), host=args.host, port=args.port,
+                log_level="warning", ssl_certfile=cert, ssl_keyfile=key)
 
 
 def _ask(question: str, yes: bool) -> bool:
@@ -157,7 +168,7 @@ async def _weekly(args) -> None:
     model, image_client, fake = _models(args)
     ws = Workspace(args.db)
     try:
-        sim = await simulate(7, model, ws, seed=args.seed)
+        sim = await simulate(7, model, ws, seed=args.seed, template=args.template)
         account = sim.account
         print(f"Simulated days 1-{account.day}: {len(sim.briefs)} daily checks.")
 
@@ -229,7 +240,8 @@ async def _simulate(args) -> None:
     ws = Workspace(args.db)
     try:
         sim = await simulate(
-            args.days, model, ws, seed=args.seed, plant_injection=args.plant_injection
+            args.days, model, ws, seed=args.seed, plant_injection=args.plant_injection,
+            template=args.template,
         )
         receipts = {r.day: r for r in sim.receipts}
         for brief in sim.briefs:
