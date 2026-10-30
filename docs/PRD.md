@@ -24,7 +24,7 @@ This document defines what PGT does, where its limits are, and how its AI roles 
   - Daily check: about 2 minutes of the user's time, mostly one-tap approvals.
   - Weekly growth review: about 15 minutes.
   - Alerts: only when something goes wrong between checks.
-- **Account access.** PGT does not take over the ad account. Real accounts are read-only. Every change goes into a change set that the user approves. In this hackathon build, approved changes run only in a sandbox account (§5).
+- **Account access.** PGT does not take over the ad account. Every change goes into a change set that the user approves. On a real account the Operator only creates new ads paused, pauses ads and changes budgets within the house rules; turning anything on stays with the user in Ads Manager (§14, Oct 30). The public demo runs on a sandbox account (§5).
 - **The standout feature is the collaboration harness, not the tool calls** (§8). Roles never share a chat history. They work through a shared workspace that has:
   - typed deliverables and an append-only event log
   - a context pack built for each role
@@ -147,13 +147,13 @@ The user can type into the Team Room, for example "Cut the budget to $30/day". P
 
 1. **Trust.** Ad changes spend money that can't be recovered, and small businesses fear losing control most.
 2. **Verifiability.** "Nothing runs until approved, and the approval is bound to the exact content" shows better engineering than full automation, and it fits the hackathon's verifiable-agents theme.
-3. **Access.** Writing to a real account needs the `ads_management` permission and Meta App Review. That can't be done safely in 6 days and shouldn't be risked in a demo.
+3. **Access.** Writing to other people's accounts needs Meta App Review for `ads_management`, which can't be done in 6 days. A local install writes to the owner's own account through their own app in development mode, within the narrow L2 rules in §14.
 
 How approvals work: the user approves a hash of the change set's content. If any role edits the change set afterwards, the approval is void and the user must approve again.
 
 ### 5.3 Out of scope for this version
 
-- Any write to a real ad account
+- Any write to a real ad account beyond the L2 rules in §14 (paused new ads, pauses, gated budget changes), and any real-account write from the public demo
 - Payments, billing, and account roles or permissions
 - Real customer data during development or debugging, including any use with `-contributor` models
 - Platforms other than Meta, team accounts, and mobile apps
@@ -198,7 +198,7 @@ If the build runs short of time, the first merge is Analyst into Media Buyer, si
 
 ### 7.1 Onboarding (P1)
 
-1. Connect: Meta Ads (real account through OAuth, read-only) or the sandbox account.
+1. Connect: Meta Ads (real account through Facebook Login for Business, local installs only) or the sandbox account.
 2. Pick a scenario template (app, e-commerce, local service) and enter the product, goal, budget and target cost.
 3. The Media Buyer runs a **setup check**. For the app template it covers the SDK, the trial event, campaign objective and optimization event. It lists what is missing, with plain-language steps. The user fixes those in Meta's own tools; PGT never does it for them.
 
@@ -402,7 +402,7 @@ The longer-term answer to "is it better?" is the acceptance suite in §11. It ru
 | Priority | Features |
 | --- | --- |
 | **P0** (needed for the demo) | Harness: all 9 components · 6 AI roles + Operator · synthetic sandbox (read tools, write tools, simulated clock and a simple performance model) · evidence ledger and code checks · weekly review with 2 approval points · daily check with one-tap approval · 7-day results check and test readout · mid-loop fact change that re-runs only affected work · 4 web views · run export and replay |
-| **P1** | Real Meta Ads connection (OAuth login and account list, read-only, 2-hour timebox) · onboarding and setup check · alerts · e-commerce template · cost panel |
+| **P1** | Real Meta Ads connection (OAuth login and account list; L2 limited to paused new ads, pauses and gated budget changes) · onboarding and setup check · alerts · e-commerce template · cost panel |
 | **P2** | Local-service template · voice input · Muse Wonder for the Growth Lead · Muse Spark Open for the open-weights prize, if Baseten or Modal credits arrive |
 
 ---
@@ -461,13 +461,18 @@ The longer-term answer to "is it better?" is the acceptance suite in §11. It ru
 ## 14. Decisions and open questions
 
 **Decided (Oct 27)**
-- Real accounts are read-only (L0); the sandbox goes up to L2.
+- Real accounts are read-only (L0); the sandbox goes up to L2. *Superseded on Oct 30, below.*
 - The 7-day results check is P0.
 - UI and deliverables are in English.
 - The daily check plus weekly review replaces the weekly-only sprint.
 - Role set approved: 6 AI roles plus the Operator (§6).
 - Agent library: **Pydantic AI**, chosen by the Day 1 spike (weighted score 4.65 vs 4.00 for the OpenAI Agents SDK, which stays the fallback). Details: `spike/SCORECARD.md` in the repo.
 - House rules are user settings with presets; Balanced is the default (§4.3).
+
+**Decided (Oct 30)**
+- A real account can run at L2 on a local install. The Operator creates new ads PAUSED in an existing ad set and the owner turns them on in Ads Manager; it may pause an ad; it changes a budget only on an ad set that owns its daily budget, after approval and the house rules. It never turns an ad on and never edits a live ad. Refusals and Meta errors go on the receipt; nothing is retried.
+- A real account gets its own workspace file, so sandbox history and real data never mix. The token stays in memory.
+- The public demo stays on the sandbox.
 - **Development tools.** The organizers confirmed that any coding tool is allowed (Claude Code, Codex, Cline, Copilot and similar) and does not need to be disclosed. Non-Meta models may be used alongside Meta's, but Meta's models must be a real part of what the project runs. Stage One checks this, and Meta tooling is 25% of the score. PGT meets this: every AI role runs on Meta models at runtime (§6). Codex and Claude Code are used only to write the code, never inside the product.
 
 **Open**

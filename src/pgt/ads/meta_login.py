@@ -5,7 +5,8 @@ a password; it gets a one-time code back on its own callback URL, checks the `st
 swaps the code for a token. The token stays in memory and is never written to the workspace.
 
 Needs META_APP_ID, META_APP_SECRET and META_LOGIN_CONFIG_ID (a Login for Business configuration
-that asks for ads_read). Off on the public demo, which runs on the labelled sandbox instead.
+that asks for ads_read, plus ads_management for L2). Off on the public demo, which runs on the
+labelled sandbox instead.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def exchange(code: str, redirect_uri: str) -> str:
 
 
 def ad_accounts(token: str) -> list[dict]:
-    """The ad accounts the owner granted, read-only."""
+    """The ad accounts the owner granted."""
     data = _get("me/adaccounts", {
         "fields": "account_id,name,currency,timezone_name", "access_token": token,
     })

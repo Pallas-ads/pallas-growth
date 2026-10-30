@@ -101,6 +101,7 @@ class ExecutionReceipt(_Out):
     skipped: list[int]  # indexes blocked or not approved
     day: int
     created_ad_ids: list[str] = []  # PAUSED ads created from ad_drafts
+    errors: list[str] = []  # writes the account refused or failed; nothing else was retried
 
 
 class DailyBrief(_Out):

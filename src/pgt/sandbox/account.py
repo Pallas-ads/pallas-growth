@@ -200,7 +200,8 @@ class SandboxWriter:
         ad.status = status
         return self._record("ad_status", ad_id=ad_id, previous=previous, status=status)
 
-    def create_ad(self, campaign_id: str, name: str) -> str:
+    def create_ad(self, campaign_id: str, name: str, creative=None) -> str:
+        """The sandbox needs no image; a real account builds the ad from `creative`."""
         account = self._account
         if account._state.campaign(campaign_id) is None:
             raise KeyError(campaign_id)

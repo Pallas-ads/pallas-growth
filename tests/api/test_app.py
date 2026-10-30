@@ -1,5 +1,6 @@
 """Web API on the offline demo week: what waits on the owner, approvals, and the room."""
 
+import json
 import time
 
 import pytest
@@ -282,3 +283,31 @@ def test_budget_change_resplits_the_plan_and_says_what_reran(client):
     # Saving the same values again changes nothing and re-runs nothing.
     res = client.post("/api/facts", json={"weekly_budget": 280})
     assert res.json()["refresh"] is False
+
+
+def test_real_account_runs_in_its_own_workspace_at_l2(client, tmp_path):
+    from tests.unit.test_meta_account import TOKEN, FakeGraph
+
+    _idle(client)
+    team = client.app.state.team
+    sandbox_ws, sandbox_day = team.ws, team.account.day
+    client.app.state.graph_transport = FakeGraph()
+    team.meta = {"token": TOKEN, "accounts": [{"kind": "meta", "account_id": "act_42",
+                                               "name": "Test", "currency": "USD"}]}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("pgt.ads.meta_login.unavailable", lambda public: None)
+        mp.setenv("META_ADSET_IDS", "111")
+        r = client.post("/api/access/connect",
+                        json={"kind": "meta", "account_id": "act_42", "level": 2})
+    assert r.status_code == 200, r.text
+    assert team.real and team.ws is not sandbox_ws
+    assert (tmp_path / "meta-act_42.db").exists()
+    a = client.get("/api/access").json()
+    assert a["connection"]["account_id"] == "act_42" and a["level"] == 2
+    assert a["connection"]["origin"] and "token" not in json.dumps(a)
+    assert [c.campaign_id for c in team.account.state().campaigns] == ["111"]
+    # The offline stand-in only knows the sandbox, so it does not run on real data.
+    assert client.post("/api/run/day").status_code == 409
+
+    assert client.post("/api/access/disconnect").status_code == 200
+    assert not team.real and team.ws is sandbox_ws and team.account.day == sandbox_day
