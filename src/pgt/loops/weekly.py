@@ -46,7 +46,7 @@ from pgt.roles.operator import apply_change_set
 from pgt.roles.producer import run_producer
 from pgt.roles.reviewer import review_creative, review_findings
 from pgt.roles.strategist import run_research
-from pgt.sandbox import SandboxAccount, product_photo
+from pgt.sandbox import SandboxAccount, product_names, product_photo
 from pgt.schemas import (
     CREATIVE_SIZES,
     AdDraft,
@@ -240,8 +240,19 @@ async def plan_week(
         )
         return _summary(scope, week, "escalated")
     return await _draft_plan(
-        scope, model, state, week, brief, brief_rec, findings, findings_rec, research, research_rec
+        scope, model, state, week, brief, brief_rec, findings, findings_rec, research, research_rec,
+        products=products_on_file(account),
     )
+
+
+def products_on_file(account) -> list[str]:
+    """The products the team has a photo of; each planned ad shows one of them."""
+    return product_names(getattr(account, "scenario", None))
+
+
+def shot_file(concept: str, main: str) -> str:
+    """Where a week's product photo is saved: the main product keeps the original name."""
+    return "product_shot.png" if concept == main else f"product_shot-{concept.replace(' ', '-')}.png"
 
 
 def owner_issue(note: str) -> str:
@@ -270,14 +281,14 @@ async def revise_plan(
         WeeklyBrief.model_validate(records["brief"].content), records["brief"],
         Findings.model_validate(records["findings"].content), records["findings"],
         MarketResearch.model_validate(records["research"].content), records["research"],
-        owner=[owner_issue(note)],
+        owner=[owner_issue(note)], products=products_on_file(account),
     )
 
 
 async def _draft_plan(
     scope: Scope, model: Model, state, week: int, brief: WeeklyBrief, brief_rec,
     findings: Findings, findings_rec, research: MarketResearch, research_rec,
-    owner: list[str] = (),
+    owner: list[str] = (), products: list[str] = ("phone",),
 ) -> WeeklyReviewSummary:
     """Growth Lead drafts the test plan, code checks it (one redo), then it waits on the owner.
     `owner` holds the owner's note when they sent the last version back."""
@@ -297,11 +308,12 @@ async def _draft_plan(
         "insight_ids": set(insights),
         "active_campaign_ids": {c.campaign_id for c in state.campaigns if c.status == "ACTIVE"},
         "ad_ids": {a.ad_id for a in state.ads},
+        "products": set(products),
     }
 
     async def draft_with(issues: list[str]):
         return await run_plan(scope, model, facts, fv, week, brief, findings.findings, insights,
-                              account_view, available, issues)
+                              account_view, available, issues, products)
 
     draft = await draft_with(list(owner))
     issues = check_plan(draft, **plan_kwargs)
@@ -421,24 +433,30 @@ async def produce_week(
     evidence_ids = sorted({i for f in findings.findings for i in f.evidence_ids})
     evidence = [ws.ledger.get(i) for i in evidence_ids if ws.ledger.has(i)]
 
-    # The product photo is segmented once with SAM 3.1 and reused for every test; skipped when
-    # every ad is reused as it was.
+    # Each product a new ad shows is segmented once with SAM 3.1 and shared by every test that
+    # shows it. Nothing is segmented when every ad is reused as it was.
     media_dir = Path(media_dir) / f"week{week}"
-    product = None
-    if note or any(_reusable(ws, week, t.test_id) is None for t in plan.tests):
-        scenario = getattr(account, "scenario", None)
-        concept = scenario.product_concept if scenario else "phone"
-        if product_shot is None and scenario is not None:
-            product_shot = product_photo(scenario)
-        if product_shot is None:
-            product_shot, _ = make_demo_product_shot()
-        save_png(product_shot, media_dir / "product_shot.png")
+    scenario = getattr(account, "scenario", None)
+    names = products_on_file(account)
+
+    def shown(test: PlanTest) -> str:
+        return test.brief.product if test.brief.product in names else names[0]
+
+    cutouts: dict[str, Image.Image] = {}
+    fresh = [t for t in plan.tests if note or _reusable(ws, week, t.test_id) is None]
+    for concept in dict.fromkeys(shown(t) for t in fresh):
+        shot = product_shot if concept == names[0] else None
+        if shot is None and scenario is not None:
+            shot = product_photo(scenario, concept)
+        if shot is None:
+            shot, _ = make_demo_product_shot()
+        save_png(shot, media_dir / shot_file(concept, names[0]))
         try:
-            boxes = await media.segment(scope, "producer", product_shot, concept)
+            boxes = await media.segment(scope, "producer", shot, concept)
         except ValueError:
-            escalate(scope, "producer", "SAM 3.1 found no product in the product photo.")
+            escalate(scope, "producer", f"SAM 3.1 found no {concept} in the product photo.")
             return _summary(scope, week, "escalated", plan_id=plan.plan_id)
-        product = cutout(product_shot, boxes[0])
+        cutouts[concept] = cutout(shot, boxes[0])
     backgrounds: dict[str, Image.Image] = {}
 
     async def answer_for(question: str, issues: list[str]):
@@ -466,7 +484,7 @@ async def produce_week(
             ad_copy = await run_producer(scope, model, facts, fv, test, insights, ask, issues)
             creative_id = f"{test.test_id}-c{attempt}"
             images, square = await _render(
-                scope, media, ad_copy, product, backgrounds, media_dir / creative_id
+                scope, media, ad_copy, cutouts[shown(test)], backgrounds, media_dir / creative_id
             )
             creative = CreativeSet(
                 creative_id=creative_id,

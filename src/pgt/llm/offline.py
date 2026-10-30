@@ -232,6 +232,7 @@ def _weekly_brief(inputs: dict) -> WeeklyBrief:
 
 
 APP = {
+    "product": "phone",
     "query": "fitness app ads",
     "angles": ("Time saved", "Habit streak"),
     "key_message": "Short home workouts you can keep up.",
@@ -240,6 +241,7 @@ APP = {
     "scene": "A calm, bright living room with open floor space",
 }
 STORE = {
+    "product": "dog harness",
     "query": "pet supply ads",
     "angles": ("Real walks", "Calmer walks"),
     "key_message": "A no-pull harness that makes the daily walk easier.",
@@ -352,6 +354,7 @@ def _plan(inputs: dict, flavor: dict = APP) -> TestPlanDraft:
                 stop_rule="Stop after 7 days, or at 3x target spend with no result.",
                 evidence_ids=f["evidence_ids"],
                 brief=CreativeBrief(
+                    product=flavor["product"],
                     angle=angle,
                     hook=hook,
                     key_message=flavor["key_message"],
@@ -373,6 +376,7 @@ def _plan(inputs: dict, flavor: dict = APP) -> TestPlanDraft:
             stop_rule="Stop after 7 days, or at 3x target spend with no result.",
             evidence_ids=findings[0]["evidence_ids"],
             brief=CreativeBrief(
+                product=flavor["product"],
                 angle=flavor["angles"][1],
                 hook=inputs["insights"][insight]["hook"],
                 key_message=flavor["key_message"],
