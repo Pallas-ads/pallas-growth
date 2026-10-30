@@ -39,7 +39,7 @@ TYPES = {
 
 HIDDEN = {
     "model.call", "model.cost", "tool.call", "context.assembled", "evidence.added",
-    "loop.finished", "loop.stage", "artifact.status", "fact.changed", "approval.simulated",
+    "loop.finished", "loop.stage", "artifact.status", "approval.simulated",
     "approval.voided", "media.call",
 }
 
@@ -313,6 +313,42 @@ def _fold(lines: list[dict], loop_id: str | None) -> dict:
             "items": lines}
 
 
+SETTING_EVENTS = {"access.level", "account.connected", "account.disconnected",
+                  "changeset.handed_off", "fact.changed"}
+LEVEL_TEXT = {
+    0: "The team reads and reports, and asks me for nothing.",
+    1: "Approved changes come back to me to apply in Ads Manager.",
+    2: "The Operator applies what I approve. New ads still start paused.",
+}
+
+
+def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict | None] | None:
+    """(actor, text, card) for a change the owner made in Settings, or None to hide it."""
+    from pgt.harness import access
+
+    p = e.payload
+    if e.type == "access.level":
+        return e.actor, f"Set the team to {access.describe(p['level'])}. {LEVEL_TEXT[p['level']]}", None
+    if e.type == "account.connected":
+        what = "Sandbox, synthetic data." if p.get("kind") == "sandbox" else "Read-only."
+        return e.actor, f"Connected {p.get('name')} ({p.get('account_id')}). {what}", None
+    if e.type == "account.disconnected":
+        return e.actor, "Disconnected the ad account.", None
+    if e.type == "changeset.handed_off":
+        record = ws.artifacts.get(e.refs[0]) if e.refs else None
+        parts = [_plural(p.get("changes", 0), "approved change")]
+        if p.get("ads"):
+            parts.append(_plural(p["ads"], "new ad"))
+        text = (f"Nothing written: the team is at L1 Propose. Apply {' and '.join(parts)} "
+                "yourself in Ads Manager.")
+        return "operator", text, _card(ws, idx, record, names) if record else None
+    if e.type == "fact.changed" and p.get("version", 1) > 1:
+        changed = ", ".join(k.replace("_", " ") for k in p.get("changed", []))
+        return e.actor, (f"Changed {changed} (facts version {p['version']}). Work built on the "
+                         "old values is marked stale."), None
+    return None
+
+
 def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
     idx = idx or Index.build(ws)
     names = campaign_names(account)
@@ -422,6 +458,11 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
                     {"id": e.id, "ts": e.ts, "who": role(e.actor), "text": text})
             else:
                 add(_msg(e, e.actor, text))
+            continue
+        if e.type in SETTING_EVENTS:
+            said = _setting(ws, idx, e, names)
+            if said is not None:
+                add(_msg(e, said[0], said[1], card=said[2]))
             continue
         line = _fold_line(ws, e)
         if line is None:

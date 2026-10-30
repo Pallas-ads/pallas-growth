@@ -8,19 +8,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
+from pgt.ads import meta_login
 from pgt.api import board, views
+from pgt.harness import access
 from pgt.harness.workspace import Workspace
 from pgt.schemas import ChangeSet
+from pgt.schemas.settings import PRESETS, HouseRules
 
 
 @dataclass
@@ -36,6 +41,8 @@ class Team:
     busy: str | None = None  # what the team is doing right now, if anything
     error: str | None = None
     tasks: set = field(default_factory=set)
+    public: bool = False  # the hosted demo: sandbox only, no real Meta login
+    meta: dict = field(default_factory=dict)  # login state, token and granted accounts; memory only
 
     def run(self, label: str, coro) -> None:
         if self.busy:
@@ -112,6 +119,30 @@ class Note(BaseModel):
     note: str = ""
 
 
+class Rules(BaseModel):
+    """A change to the house rules. Missing fields keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset: Literal["conservative", "balanced", "aggressive"] | None = None
+    daily_budget_cap: float | None = Field(None, gt=0, le=100_000)
+    max_budget_change_pct: float | None = Field(None, gt=0, le=1)
+    min_days_between_budget_changes: int | None = Field(None, ge=0, le=30)
+    min_spend_multiple_before_pause: float | None = Field(None, ge=0, le=10)
+    protect_learning_phase: bool | None = None
+
+
+class Connect(BaseModel):
+    kind: Literal["sandbox", "meta"] = "sandbox"
+    account_id: str | None = None
+    level: int = Field(access.DEFAULT_LEVEL, ge=0, le=2)
+    rules: Rules | None = None
+
+
+class Level(BaseModel):
+    level: int = Field(ge=0, le=2)
+
+
 MAX_UPLOAD = 5 * 1024 * 1024
 
 
@@ -183,6 +214,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             raise HTTPException(409, "This version is not waiting on you")
         if team.busy:
             raise HTTPException(409, f"The team is busy: {team.busy}")
+        if not access.can_propose(team.ws):
+            raise HTTPException(409, "The team is set to L0 Observe and acts on nothing. Raise "
+                                     "the level in Settings to approve proposals.")
         approved = None
         if record.kind == "ChangeSet" and record.content.get("changes"):
             approved = [g.change_index for g in ChangeSet.model_validate(record.content).gate
@@ -192,6 +226,14 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         except (PermissionError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
         period = key.split("/")[0]
+        if key.endswith("/change_set") and not access.can_apply(team.ws):
+            content = record.content
+            team.ws.events.append(
+                "changeset.handed_off", "operator",
+                {"key": key, "changes": len(approved or []),
+                 "ads": len(content.get("ad_drafts") or [])},
+                refs=[record.artifact_id], sim_day=team.account.day if team.account else None)
+            return {"ok": True, "handed_off": True}
         if key.endswith("/test_plan") and period.startswith("week"):
             week = int(period[4:])
             team.run("Producing creative", produce_week(
@@ -244,7 +286,8 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             brief = await run_daily_check(team.ws, team.account, team.model, team.meter)
             key = f"day{team.account.day}/change_set"
             record = team.ws.artifacts.latest(key)
-            if (record and brief.review and brief.review.verdict == "pass"
+            if (record and access.can_propose(team.ws)
+                    and brief.review and brief.review.verdict == "pass"
                     and any(g.allowed for g in ChangeSet.model_validate(record.content).gate)):
                 team.ws.events.append("approval.requested", "media_buyer",
                                       {"key": key, "what": "change set"},
@@ -260,6 +303,9 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
         if team.account is None:
             raise HTTPException(409, "The demo week is still being set up")
+        if not access.can_propose(team.ws):
+            raise HTTPException(409, "The team is set to L0 Observe, so it does not plan tests. "
+                                     "Raise the level in Settings first.")
         team.run("Planning the week",
                  plan_week(team.ws, team.account, team.model, meter=team.meter))
         return {"ok": True}
@@ -282,6 +328,110 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
             "day": team.account.day if team.account else None,
             "now": datetime.now(UTC).isoformat(),
         }
+
+    def _day():
+        return team.account.day if team.account else None
+
+    @app.get("/api/access")
+    async def get_access():
+        facts = team.ws.facts.current()
+        return {
+            "connection": access.connection(team.ws),
+            "level": access.level(team.ws),
+            "levels": access.LEVELS,
+            "sandbox": access.SANDBOX,
+            "public": team.public,
+            "meta_login": meta_login.unavailable(team.public),
+            "meta_accounts": team.meta.get("accounts", []),
+            "rules": facts.house_rules.model_dump(mode="json"),
+            "presets": PRESETS,
+            "weekly_budget": facts.weekly_budget,
+            "weekly_test_budget": round(facts.weekly_budget * facts.test_budget_share, 2),
+            "constraints": facts.constraints,
+            "fact_version": team.ws.facts.version,
+        }
+
+    def _set_rules(body: Rules) -> int:
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}. Change the rules after.")
+        facts = team.ws.facts.current()
+        values = facts.house_rules.model_dump()
+        if body.preset:
+            values.update(PRESETS[body.preset], preset=body.preset)
+        fields = body.model_dump(exclude_none=True, exclude={"preset"})
+        if fields:
+            values.update(fields, preset="custom")
+        rules = HouseRules(**values)
+        if rules == facts.house_rules:
+            return team.ws.facts.version
+        return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user")
+
+    @app.post("/api/house-rules")
+    async def house_rules(body: Rules):
+        return {"ok": True, "fact_version": _set_rules(body)}
+
+    @app.post("/api/access/connect")
+    async def connect(body: Connect):
+        if body.kind == "sandbox":
+            account = dict(access.SANDBOX)
+        else:
+            reason = meta_login.unavailable(team.public)
+            if reason:
+                raise HTTPException(409, reason)
+            granted = {a["account_id"]: a for a in team.meta.get("accounts", [])}
+            if body.account_id not in granted:
+                raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
+            account = granted[body.account_id]
+        try:
+            access.connect(team.ws, account, body.level, sim_day=_day())
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if body.rules:
+            _set_rules(body.rules)
+        return {"ok": True}
+
+    @app.post("/api/access/level")
+    async def set_level(body: Level):
+        current = access.connection(team.ws)
+        if current and current.get("kind") == "meta" and body.level > access.PROPOSE:
+            raise HTTPException(409, "A real Meta ad account is read-only in this build (L0 or L1)")
+        access.set_level(team.ws, body.level, sim_day=_day())
+        return {"ok": True, "level": body.level}
+
+    @app.post("/api/access/disconnect")
+    async def disconnect():
+        access.disconnect(team.ws, sim_day=_day())
+        team.meta.clear()
+        return {"ok": True}
+
+    @app.get("/api/meta/login")
+    async def meta_start(request: Request):
+        """Send the owner to Facebook Login for Business on facebook.com. Local installs only."""
+        reason = meta_login.unavailable(team.public)
+        if reason:
+            raise HTTPException(409, reason)
+        state = meta_login.new_state()
+        redirect = str(request.url_for("meta_callback"))
+        team.meta = {"state": state, "redirect": redirect}
+        return RedirectResponse(meta_login.login_url(redirect, state), status_code=302)
+
+    @app.get("/api/meta/callback", name="meta_callback")
+    async def meta_callback(code: str = "", state: str = "", error: str = ""):
+        expected = team.meta.get("state")
+        if error or not code:
+            team.meta.clear()
+            return RedirectResponse("/#/settings?meta=cancelled", status_code=302)
+        if not expected or not secrets.compare_digest(state, expected):
+            team.meta.clear()
+            raise HTTPException(400, "Login state does not match. Start again from Settings.")
+        try:
+            token = await asyncio.to_thread(meta_login.exchange, code, team.meta["redirect"])
+            accounts = await asyncio.to_thread(meta_login.ad_accounts, token)
+        except Exception:  # noqa: BLE001 - the token and Meta's reply are not shown or logged
+            team.meta.clear()
+            return RedirectResponse("/#/settings?meta=failed", status_code=302)
+        team.meta = {"token": token, "accounts": accounts}
+        return RedirectResponse("/#/settings?meta=pick", status_code=302)
 
     @app.get("/api/dashboard")
     async def dashboard(days: int = 7):

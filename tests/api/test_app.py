@@ -167,3 +167,66 @@ def test_upload_accepts_images_only(client):
     assert client.get(up["image"]).status_code == 200
     assert client.post("/api/assets/upload", content=b"<svg/>").status_code == 415
     assert client.post("/api/assets/upload", content=b"").status_code == 400
+
+
+def test_first_run_connects_the_sandbox_with_a_level_and_rules(client):
+    a = client.get("/api/access").json()
+    assert a["connection"] is None and a["level"] == 2
+    assert a["meta_login"]  # no Meta app configured in tests
+    r = client.post("/api/access/connect",
+                    json={"kind": "sandbox", "level": 1, "rules": {"daily_budget_cap": 80}})
+    assert r.status_code == 200
+    a = client.get("/api/access").json()
+    assert a["connection"]["account_id"] == "act_sandbox_0001"
+    assert a["level"] == 1 and a["rules"]["daily_budget_cap"] == 80
+    assert a["rules"]["preset"] == "custom" and a["fact_version"] == 2
+    texts = [i["text"] for i in client.get("/api/room").json()["items"] if i["kind"] == "msg"]
+    assert any(t.startswith("Set the team to L1 Propose") for t in texts)
+    assert any(t.startswith("Changed house rules (facts version 2)") for t in texts)
+    # A real account cannot be connected without the Meta login.
+    assert client.post("/api/access/connect", json={"kind": "meta", "account_id": "act_1"}
+                       ).status_code == 409
+    assert client.get("/api/meta/login", follow_redirects=False).status_code == 409
+
+
+def test_house_rules_reject_values_out_of_range(client):
+    assert client.post("/api/house-rules", json={"daily_budget_cap": -5}).status_code == 422
+    assert client.post("/api/house-rules", json={"max_budget_change_pct": 3}).status_code == 422
+    assert client.post("/api/house-rules", json={"anything": 1}).status_code == 422
+    r = client.post("/api/house-rules", json={"preset": "conservative"}).json()
+    rules = client.get("/api/access").json()["rules"]
+    assert r["fact_version"] == 2 and rules["preset"] == "conservative"
+    assert rules["max_budget_change_pct"] == 0.10 and rules["daily_budget_cap"] == 60
+
+
+def test_levels_gate_approvals_and_the_operator(client):
+    client.post("/api/access/level", json={"level": 0})
+    assert client.post("/api/approve/week1/test_plan").status_code == 409
+    assert client.post("/api/run/week").status_code == 409
+    client.post("/api/access/level", json={"level": 1})
+    assert client.post("/api/approve/week1/test_plan").status_code == 200
+    _idle(client)
+    r = client.post("/api/approve/week1/change_set").json()
+    assert r["handed_off"]
+    _idle(client)
+    detail = client.get("/api/deliverables/week1/change_set").json()
+    assert detail["status"] == "ok"  # approved, not applied
+    room = client.get("/api/room").json()["items"]
+    assert any(i["kind"] == "msg" and i["who"]["actor"] == "operator"
+               and i["text"].startswith("Nothing written: the team is at L1 Propose") for i in room)
+
+
+def test_operator_refuses_below_l2_even_with_an_approval(tmp_path):
+    from pgt.harness import access
+    from pgt.roles.operator import apply_change_set
+
+    team = offline_team(str(tmp_path / "ws.db"), str(tmp_path / "media"))
+    with TestClient(create_app(team)) as c:
+        _idle(c)
+        key = team.ws.events.list("approval.granted")[0].payload["key"]  # a simulated day
+        access.set_level(team.ws, 1)
+        with pytest.raises(PermissionError, match="L1 Propose"):
+            apply_change_set(team.ws, team.account, key)
+        with pytest.raises(PermissionError):
+            access.set_level(team.ws, 2, actor="operator")
+    team.ws.close()

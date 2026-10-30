@@ -113,6 +113,21 @@ export type SettingsData = {
   cap: number | null; remaining: number | null; day: number | null; now: string;
 };
 
+/** Which ad account the team works on, how much it may do, and the house rules. */
+export type Account = { kind: "sandbox" | "meta"; account_id: string; name: string; currency: string;
+                        timezone: string };
+export type Rules = { preset: string; daily_budget_cap: number; max_budget_change_pct: number;
+  min_days_between_budget_changes: number; min_spend_multiple_before_pause: number;
+  protect_learning_phase: boolean; check_time: string };
+export type LevelInfo = { level: number; code: string; name: string; text: string; scopes: string[] };
+export type AccessData = {
+  connection: (Account & { ts: string; by: string }) | null; level: number; levels: LevelInfo[];
+  sandbox: Account; public: boolean; meta_login: string | null; meta_accounts: Account[];
+  rules: Rules; presets: Record<string, Partial<Rules>>; weekly_budget: number;
+  weekly_test_budget: number; constraints: string[]; fact_version: number;
+};
+export type RulesPatch = Partial<Omit<Rules, "check_time">>;
+
 /** "muse-spark-1.3", or "offline stand-in" when no real model answered. */
 export function modelLabel(models: string[] | undefined, mode: Mode | undefined): string {
   if (!models?.length) return "";
@@ -148,6 +163,13 @@ export const api = {
   runDay: () => call("/api/run/day", { method: "POST" }),
   runWeek: () => call("/api/run/week", { method: "POST" }),
   settings: () => call<SettingsData>("/api/settings"),
+  access: () => call<AccessData>("/api/access"),
+  connect: (body: { kind: "sandbox" | "meta"; account_id?: string; level: number; rules?: RulesPatch }) =>
+    call("/api/access/connect", { method: "POST", body: JSON.stringify(body) }),
+  setLevel: (level: number) => call("/api/access/level", { method: "POST", body: JSON.stringify({ level }) }),
+  disconnect: () => call("/api/access/disconnect", { method: "POST" }),
+  houseRules: (patch: RulesPatch) =>
+    call<{ fact_version: number }>("/api/house-rules", { method: "POST", body: JSON.stringify(patch) }),
   dashboard: (days: number) => call<DashboardData>(`/api/dashboard?days=${days}`),
   assets: () => call<{ items: Asset[]; account: string }>("/api/assets"),
   upload: async (file: File) => {

@@ -3,6 +3,7 @@ It is code, not a model."""
 
 from __future__ import annotations
 
+from pgt.harness import access
 from pgt.harness.workspace import Workspace
 from pgt.sandbox import SandboxAccount
 from pgt.schemas import ChangeSet, ExecutionReceipt
@@ -21,6 +22,12 @@ def apply_change_set(ws: Workspace, account: SandboxAccount, key: str) -> Execut
             sim_day=record.sim_day,
         )
         raise PermissionError(f"{key} has no valid approval for its current content.")
+    if not access.can_apply(ws):
+        reason = (f"The team is set to {access.describe(access.level(ws))}. The Operator writes "
+                  "only at L2 Apply after approval.")
+        ws.events.append("changeset.refused", "operator", {"key": key, "reason": reason},
+                         refs=[record.artifact_id], sim_day=record.sim_day)
+        raise PermissionError(reason)
     change_set = ChangeSet.model_validate(record.content)
     approved = set(ws.approvals.approved_indexes(key))
     allowed = {g.change_index for g in change_set.gate if g.allowed}

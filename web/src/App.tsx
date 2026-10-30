@@ -1,4 +1,5 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Wizard } from "./Access";
 import { api, useData, useLive, type Mode } from "./api";
 import Assets from "./Assets";
 import { TEAM } from "./avatars";
@@ -6,13 +7,13 @@ import Dashboard from "./Dashboard";
 import Deliverables from "./Deliverables";
 import Detail from "./Detail";
 import Room from "./Room";
-import { useRoute, type Route } from "./route";
+import { go, useRoute, type Route } from "./route";
 import Settings from "./Settings";
 import { OWNER } from "./ui";
 
 const MODE_LABEL = { offline: "Offline stand-in", live: "Live · Meta API", mixed: "Live · Baseten + Meta API" };
 
-function Sidebar({ route, waiting, mode }: { route: Route; waiting: number; mode?: Mode }) {
+function Sidebar({ route, waiting, mode, account }: { route: Route; waiting: number; mode?: Mode; account?: string }) {
   const page = route.page === "detail" ? "deliverables" : route.page;
   const item = (key: string, label: string, extra?: ReactNode) => (
     <a className={page === key ? "nav-i on" : "nav-i"} href={`#/${key}`} style={{ textDecoration: "none" }}>
@@ -23,7 +24,7 @@ function Sidebar({ route, waiting, mode }: { route: Route; waiting: number; mode
     <aside className="col rule-r" style={{ background: "var(--sunken)", padding: "18px 12px", gap: 22 }}>
       <div className="mark" style={{ padding: "0 6px" }}>
         <img className="mark-logo" src="/pallas-logo.png" alt="Pallas" />
-        <div><div className="mark-name">Growth Team</div><div className="mark-sub">Pallas Fit · sandbox</div></div>
+        <div><div className="mark-name">Growth Team</div><div className="mark-sub">{account ?? "No account connected"}</div></div>
       </div>
       {mode && <a className={"mode " + mode} href="#/settings" title="Which models answer. Details in Settings.">
         <span className="dot" />{MODE_LABEL[mode]}</a>}
@@ -61,7 +62,20 @@ export default function App() {
   const items = list.data?.items ?? [];
   const waiting = items.filter((d) => d.status === "wait").length;
   const mode = status.data?.mode;
-  const sidebar = <Sidebar route={route} waiting={waiting} mode={mode} />;
+  const [bump, setBump] = useState(0);
+  const access = useData(api.access, [tick, bump]);
+  const [later, setLater] = useState(false);
+  const refresh = () => setBump((b) => b + 1);
+  const sidebar = <Sidebar route={route} waiting={waiting} mode={mode} 
+                          account={access.data ? access.data.connection?.name ?? "No account connected" : ""} />;
+  // First run, "Switch account", or back from facebook.com with accounts to pick.
+  const a = access.data;
+  const asked = route.page === "settings" && (route.q.get("setup") || route.q.get("meta") === "pick");
+  const wizard = a && (asked || (!a.connection && !later)) ? (
+    <Wizard key={asked ? "asked" : "first"} a={a} start={route.q.get("meta") === "pick" && a.meta_accounts.length ? 1 : 0}
+            onClose={() => { setLater(true); if (asked) go("settings", { s: "connection" }); }}
+            onDone={() => { setLater(true); refresh(); if (asked) go("settings", { s: "connection" }); }} />
+  ) : null;
 
   let page: ReactNode;
   if (route.page === "deliverables") page = <Deliverables items={items} route={route} sidebar={sidebar} />;
@@ -70,8 +84,9 @@ export default function App() {
     page = <Detail d={d} error={detail.error} sidebar={sidebar} onChange={() => undefined} mode={mode} />;
   } else if (route.page === "dashboard") page = <Dashboard tick={tick} route={route} sidebar={sidebar} />;
   else if (route.page === "assets") page = <Assets tick={tick} route={route} sidebar={sidebar} mode={mode} />;
-  else if (route.page === "settings") page = <Settings tick={tick} busy={busy} sidebar={sidebar} />;
+  else if (route.page === "settings") page = <Settings tick={tick} busy={busy} sidebar={sidebar} route={route}
+                                                       access={a ?? null} onAccess={refresh} />;
   else page = <Room items={room.data?.items ?? []} where={status.data?.where ?? ""} busy={busy}
                     error={status.data?.error ?? null} route={route} sidebar={sidebar} mode={mode} />;
-  return <div className="frame">{page}</div>;
+  return <div className="frame">{page}{wizard}</div>;
 }

@@ -2,7 +2,7 @@
 
 pgt simulate --days 7 [--live] [--provider meta|mixed] [--db path]
 pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/media]
-pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5]
+pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5] [--public]
 
 --provider mixed runs the text roles on Muse Spark (open weights) on Baseten and keeps the
 Creative Strategist (hosted web search) and image work on the Meta API.
@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--provider", choices=["meta", "mixed"], default="meta")
     serve.add_argument("--effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     serve.add_argument(
+        "--public", action="store_true", default=bool(os.environ.get("PGT_PUBLIC")),
+        help="Hosted demo: sandbox only, no real Meta login (also PGT_PUBLIC=1)",
+    )
+    serve.add_argument(
         "--cap", type=float, default=5.0,
         help="Live runs stop before any call once this many dollars are spent (list price)",
     )
@@ -114,6 +118,7 @@ def _serve(args) -> None:
     else:
         team = offline_team(db, str(run_dir / "media"))
         print("Offline demo: a rule-based stand-in answers instead of Muse (no cost).")
+    team.public = args.public
     print(f"Workspace {db}. Open http://{args.host}:{args.port}")
     uvicorn.run(create_app(team, args.web), host=args.host, port=args.port, log_level="warning")
 
