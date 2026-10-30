@@ -169,7 +169,7 @@ export function HouseRulesForm({ a, onChange }: { a: AccessData; onChange: () =>
         <div className="r">Weekly budget<small>From Business facts. Part of it is kept for creative tests</small></div>
         <div className="v">{money(a.weekly_budget)} · {money(a.weekly_test_budget)} for tests</div>
         <div className="r">What ads may never say<small>From Business facts</small></div>
-        <div className="v" style={{ whiteSpace: "normal", maxWidth: 320 }}>{a.constraints.join("; ")}</div>
+        <div className="v"><span style={{ whiteSpace: "normal", maxWidth: 320 }}>{a.constraints.join("; ")}</span></div>
       </div>
       <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
         <button className="btn ink xs" disabled={busy || !dirty || typeof patch === "string"}
@@ -347,7 +347,7 @@ export function Wizard({ a, start, onClose, onDone }: {
             <div className="r">New ads start paused<small>Fixed</small></div>
             <div className="v"><span className="lock-t">fixed</span><span className="tog lock" /></div>
             <div className="r">What ads may never say<small>From Business facts</small></div>
-            <div className="v" style={{ whiteSpace: "normal", maxWidth: 300 }}>{a.constraints.join("; ")}</div>
+            <div className="v"><span style={{ whiteSpace: "normal", maxWidth: 300 }}>{a.constraints.join("; ")}</span></div>
           </div>
         </>)}
 
