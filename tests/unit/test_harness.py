@@ -3,6 +3,7 @@
 import sqlite3
 
 import pytest
+
 from pgt.harness.hashing import content_hash
 from pgt.harness.policy import (
     ALLOWLIST,
@@ -14,7 +15,6 @@ from pgt.harness.policy import (
 )
 from pgt.harness.verify import check_changes, check_findings, number_matches
 from pgt.harness.workspace import Workspace
-
 from pgt.schemas import (
     AccountState,
     AdState,
@@ -346,6 +346,21 @@ def test_cost_meter(ws):
         meter.record("media_buyer", "d1", 0.11)
     assert len(ws.events.list("model.cost")) == 4
     assert len(ws.events.list("budget.exceeded")) == 2
+
+
+def test_total_cap_refuses_the_next_call(ws):
+    """A live workspace's total cap: the call that crosses it is recorded, the next is refused."""
+    meter = CostMeter(ws.events, total=0.10)
+    meter.check("analyst", "d1")
+    meter.record("analyst", "d1", 0.06)
+    with pytest.raises(SpendCapExceeded):
+        meter.record("reviewer", "d2", 0.05)
+    with pytest.raises(SpendCapExceeded, match="spend cap"):
+        meter.check("analyst", "d3")
+    assert meter.remaining() == 0.0
+    caps = [e.payload["cap"] for e in ws.events.list("budget.exceeded")]
+    assert caps == ["total", "total"]
+    assert CostMeter(ws.events).remaining() is None
 
 
 # --- Policy: house rules ---------------------------------------------------------------------

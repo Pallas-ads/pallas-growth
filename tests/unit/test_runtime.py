@@ -174,3 +174,15 @@ def test_meta_request_checker_catches_bad_requests():
 def test_estimate_cost():
     assert estimate_cost("muse-spark-1.3", 1_000_000, 0) == pytest.approx(1.25)
     assert estimate_cost("muse-spark-1.3-contributor", 0, 1_000_000, 2) == pytest.approx(4.255)
+
+
+def test_used_up_cap_stops_a_loop_before_any_model_call():
+    from pgt.llm.offline import offline_model
+    from pgt.loops.simulate import simulate
+
+    ws = Workspace()
+    model, _ = offline_model("muse-spark-1.3")
+    with pytest.raises(SpendCapExceeded):
+        asyncio.run(simulate(1, model, ws, meter=CostMeter(ws.events, total=0.0)))
+    assert ws.events.list("model.call") == []
+    assert ws.events.list("budget.exceeded")[0].payload["cap"] == "total"

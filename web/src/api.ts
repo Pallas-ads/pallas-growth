@@ -26,7 +26,7 @@ export type Line = { id: number; ts: string; sim_day: number | null; type: strin
 
 export type Msg = {
   kind: "msg"; id: number; ts: string; sim_day: number | null; who: Who; text: string;
-  mention: boolean; card: Card | null; replies: Reply[];
+  mention: boolean; card: Card | null; replies: Reply[]; models?: string[];
 };
 export type Fold = {
   kind: "fold"; id: number; ids: number[]; actors: Who[]; names: string[]; tail: string;
@@ -49,6 +49,7 @@ export type Detail = Deliverable & {
   evidence: Evidence[];
   can_approve: boolean;
   approve_blocked: string[];
+  made_with: Tally | null;
   discussion: { anchor_id: number | null; anchor_ts: string | null; anchor_who: Who | null;
                 root: Msg | null; lines: Line[] };
   ads?: { ad: string; name: string; test_id: string; campaign: string; campaign_id: string;
@@ -63,8 +64,27 @@ export type Detail = Deliverable & {
             brief?: { angle: string; hook: string } }[];
 };
 
+export type Mode = "offline" | "live" | "mixed";
 export type AppStatus = { busy: string | null; error: string | null; where: string;
-                          day: number | null; last_event_id: number; owner: string };
+                          day: number | null; last_event_id: number; owner: string; mode: Mode };
+
+/** Model calls for one role or one deliverable, at list price. */
+export type Tally = {
+  models: { model: string; provider: string; calls: number }[];
+  calls: number; failed: number; tokens: number; searches: number; cost: number; seconds: number;
+};
+export type SettingsData = {
+  facts: Record<string, unknown>; fact_version: number; model_calls: number; tokens: number;
+  cost: number; offline: boolean; mode: Mode; usage: (Tally & { who: Who })[];
+  cap: number | null; remaining: number | null; day: number | null; now: string;
+};
+
+/** "muse-spark-1.3", or "offline stand-in" when no real model answered. */
+export function modelLabel(models: string[] | undefined, mode: Mode | undefined): string {
+  if (!models?.length) return "";
+  const names = models.map((m) => m.replace(/^meta-models\//, "")).join(" + ");
+  return mode === "offline" ? `${names}, offline stand-in` : names;
+}
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -93,7 +113,7 @@ export const api = {
     }),
   runDay: () => call("/api/run/day", { method: "POST" }),
   runWeek: () => call("/api/run/week", { method: "POST" }),
-  settings: () => call<Record<string, any>>("/api/settings"),
+  settings: () => call<SettingsData>("/api/settings"),
 };
 
 /** A counter that goes up whenever the event log or the team's busy state changes. */

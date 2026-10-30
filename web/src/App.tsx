@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { api, useData, useLive } from "./api";
+import { api, useData, useLive, type Mode } from "./api";
 import { TEAM } from "./avatars";
 import Deliverables from "./Deliverables";
 import Detail from "./Detail";
@@ -8,7 +8,9 @@ import { useRoute, type Route } from "./route";
 import Settings from "./Settings";
 import { OWNER } from "./ui";
 
-function Sidebar({ route, waiting }: { route: Route; waiting: number }) {
+const MODE_LABEL = { offline: "Offline stand-in", live: "Live · Meta API", mixed: "Live · Baseten + Meta API" };
+
+function Sidebar({ route, waiting, mode }: { route: Route; waiting: number; mode?: Mode }) {
   const page = route.page === "detail" ? "deliverables" : route.page;
   const item = (key: string, label: string, extra?: ReactNode) => (
     <a className={page === key ? "nav-i on" : "nav-i"} href={`#/${key}`} style={{ textDecoration: "none" }}>
@@ -21,6 +23,8 @@ function Sidebar({ route, waiting }: { route: Route; waiting: number }) {
         <img className="mark-logo" src="/pallas-logo.png" alt="Pallas" />
         <div><div className="mark-name">Growth Team</div><div className="mark-sub">Pallas Fit · sandbox</div></div>
       </div>
+      {mode && <a className={"mode " + mode} href="#/settings" title="Which models answer. Details in Settings.">
+        <span className="dot" />{MODE_LABEL[mode]}</a>}
       <nav className="nav">
         {item("room", "Team Room")}
         {item("deliverables", "Deliverables", waiting > 0 &&
@@ -52,15 +56,16 @@ export default function App() {
   const detail = useData(() => (route.key ? api.detail(route.key) : Promise.resolve(null)), [tick, route.key]);
   const items = list.data?.items ?? [];
   const waiting = items.filter((d) => d.status === "wait").length;
-  const sidebar = <Sidebar route={route} waiting={waiting} />;
+  const mode = status.data?.mode;
+  const sidebar = <Sidebar route={route} waiting={waiting} mode={mode} />;
 
   let page: ReactNode;
   if (route.page === "deliverables") page = <Deliverables items={items} route={route} sidebar={sidebar} />;
   else if (route.page === "detail") {
     const d = detail.data && detail.data.key === route.key ? detail.data : null;
-    page = <Detail d={d} error={detail.error} sidebar={sidebar} onChange={() => undefined} />;
+    page = <Detail d={d} error={detail.error} sidebar={sidebar} onChange={() => undefined} mode={mode} />;
   } else if (route.page === "settings") page = <Settings tick={tick} busy={busy} sidebar={sidebar} />;
   else page = <Room items={room.data?.items ?? []} where={status.data?.where ?? ""} busy={busy}
-                    error={status.data?.error ?? null} route={route} sidebar={sidebar} />;
+                    error={status.data?.error ?? null} route={route} sidebar={sidebar} mode={mode} />;
   return <div className="frame">{page}</div>;
 }

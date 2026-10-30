@@ -90,3 +90,22 @@ def test_send_back_and_messages_land_in_the_thread(client):
 
 def test_media_stays_inside_the_media_folder(client):
     assert client.get("/api/media/../ws.db").status_code == 404
+
+
+def test_settings_report_models_and_spend_per_role(client):
+    s = client.get("/api/settings").json()
+    assert s["mode"] == "offline" and s["cap"] is None and s["remaining"] is None
+    roles = {u["who"]["actor"]: u for u in s["usage"]}
+    assert {"analyst", "growth_lead", "strategist"} <= set(roles)
+    assert roles["analyst"]["models"][0] == {
+        "model": "muse-spark-1.3", "provider": "Meta API", "calls": roles["analyst"]["calls"]}
+    assert sum(u["calls"] for u in s["usage"]) == s["model_calls"]
+
+
+def test_messages_and_deliverables_name_their_models(client):
+    items = client.get("/api/room").json()["items"]
+    plan_msg = next(i for i in items if i["kind"] == "msg" and i["mention"])
+    assert plan_msg["models"] == ["muse-spark-1.3"]
+    d = client.get("/api/deliverables/week1/test_plan").json()
+    assert d["made_with"]["calls"] >= 1
+    assert d["made_with"]["models"][0]["model"] == "muse-spark-1.3"

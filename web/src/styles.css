@@ -293,3 +293,19 @@ button { font: inherit; cursor: pointer; }
 @media (max-width: 1100px) {
   .dl-h, .dl-r { grid-template-columns: minmax(0,1fr) 128px 104px 96px 112px; gap: 10px; }
 }
+
+/* Which models answer: sidebar badge, message labels, per-role usage. */
+.faint { color: var(--faint); }
+.mh .model { font: 10.5px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mode { display: flex; align-items: center; gap: 8px; margin: -10px 6px 0; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 2px; background: var(--surface); font: 500 11px var(--mono); color: var(--text); }
+.mode:hover { color: var(--ink); text-decoration: none; border-color: var(--rule-strong); }
+.mode .dot { width: 7px; height: 7px; background: var(--faint); }
+.mode.live .dot, .mode.mixed .dot { background: oklch(0.62 0.15 150); box-shadow: 0 0 0 3px oklch(0.95 0.04 150); }
+.use { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.use th { font: 500 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--faint); text-align: left; padding: 0 8px 8px 0; border-bottom: 1px solid var(--rule-strong); }
+.use td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; color: var(--ink); }
+.use td.n, .use th.n { text-align: right; font-family: var(--mono); font-size: 12px; }
+.use td .sub { font: 10.5px var(--mono); color: var(--faint); margin-top: 2px; }
+.use tfoot td { border-bottom: 0; font-weight: 600; }
+.capbar { height: 6px; background: var(--sunken); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.capbar > i { display: block; height: 100%; background: var(--blue); }

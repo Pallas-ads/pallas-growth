@@ -25,6 +25,7 @@ class MediaClient:
 
     async def background(self, scope: Scope, role: str, prompt: str) -> Image.Image:
         """Generate one background scene. The prompt must not ask for text or the product."""
+        scope.meter.check(role, scope.loop_id)
         started = perf_counter()
         ok = False
         try:
@@ -52,6 +53,7 @@ class MediaClient:
 
     async def segment(self, scope: Scope, role: str, image: Image.Image, concept: str) -> list[Box]:
         """Find `concept` in `image` with SAM 3.1 and return its boxes."""
+        scope.meter.check(role, scope.loop_id)
         started = perf_counter()
         ok = False
         data_url = "data:image/png;base64," + base64.b64encode(png_bytes(image)).decode()

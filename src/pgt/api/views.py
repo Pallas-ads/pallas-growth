@@ -90,6 +90,7 @@ class Index:
     applied: dict[str, Event] = field(default_factory=dict)  # artifact_id -> applied event
     returned: dict[str, Event] = field(default_factory=dict)  # key -> latest send-back
     simulated: set[int] = field(default_factory=set)  # grant ids that a simulated user made
+    models: dict[tuple[str | None, str], list[str]] = field(default_factory=dict)  # (loop, role)
 
     @classmethod
     def build(cls, ws: Workspace) -> Index:
@@ -114,6 +115,10 @@ class Index:
                 idx.applied[e.refs[0]] = e
             elif e.type == "approval.returned":
                 idx.returned[p["key"]] = e
+            elif e.type == "model.call" and p.get("ok", True):
+                names = idx.models.setdefault((e.loop_id, p["role"]), [])
+                if p["model"] not in names:
+                    names.append(p["model"])
         return idx
 
     def valid_grant(self, record: ArtifactRecord) -> Event | None:
@@ -224,7 +229,7 @@ def deliverables(ws: Workspace, account=None, idx: Index | None = None) -> list[
 def _msg(e: Event, actor: str, text: str, mention: bool = False, card: dict | None = None) -> dict:
     return {"kind": "msg", "id": e.id, "ts": e.ts, "sim_day": e.sim_day, "who": role(actor),
             "text": (f"@{OWNER} " if mention else "") + text, "mention": mention,
-            "card": card, "replies": []}
+            "card": card, "replies": [], "loop_id": e.loop_id}
 
 
 def _card(ws: Workspace, idx: Index, record: ArtifactRecord, names: dict[str, str]) -> dict:
@@ -426,6 +431,9 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
         fold.append({"id": e.id, "ts": e.ts, "sim_day": e.sim_day, "type": e.type,
                      "who": role(line[0]), "text": line[1]})
     flush()
+    for it in items:
+        if it["kind"] == "msg":
+            it["models"] = idx.models.get((it.pop("loop_id"), it["who"]["actor"]), [])
     return items
 
 
@@ -542,6 +550,7 @@ def detail(ws: Workspace, key: str, account=None, media_dir: str | None = None) 
         "approve_blocked": [r["rule"] for r in _checks(ws, record)
                             if not r["passed"] and r["rule"] != "creative_review"],
         "discussion": discussion(ws, idx, record, account),
+        "made_with": made_with(ws, record),
         **extra,
     }
 
@@ -577,3 +586,51 @@ def discussion(ws: Workspace, idx: Index, record: ArtifactRecord, account=None) 
         "root": root,
         "lines": lines,
     }
+
+
+# ---------------------------------------------------------------- models and spend
+
+
+def provider(model: str) -> str:
+    return "Baseten" if model.startswith("meta-models/") else "Meta API"
+
+
+def _tally(calls: list[Event]) -> dict:
+    models: dict[str, int] = {}
+    for e in calls:
+        models[e.payload["model"]] = models.get(e.payload["model"], 0) + 1
+    return {
+        "models": [{"model": m, "provider": provider(m), "calls": n} for m, n in models.items()],
+        "calls": len(calls),
+        "failed": sum(1 for e in calls if not e.payload.get("ok", True)),
+        "tokens": sum(e.payload["input_tokens"] + e.payload["output_tokens"] for e in calls),
+        "searches": sum(e.payload.get("searches", 0) for e in calls),
+        "cost": round(sum(e.payload["cost"] for e in calls), 4),
+        "seconds": round(sum(e.payload.get("wall_time_s", 0) for e in calls), 1),
+    }
+
+
+def usage(ws: Workspace) -> list[dict]:
+    """Model calls per role: which models, on which provider, and what they cost."""
+    by_role: dict[str, list[Event]] = {}
+    for e in ws.events.list("model.call"):
+        by_role.setdefault(e.payload["role"], []).append(e)
+    order = list(ROLES)
+    return [{"who": role(r), **_tally(calls)}
+            for r, calls in sorted(by_role.items(),
+                                   key=lambda kv: order.index(kv[0]) if kv[0] in order else 99)]
+
+
+def made_with(ws: Workspace, record: ArtifactRecord) -> dict | None:
+    """The model calls the author made for this version: everything the role called since its
+    previous published deliverable. Loops run one at a time, so that span is this version's work
+    (for creative it includes the Muse Image and SAM 3.1 calls)."""
+    pubs = [e for e in ws.events.list("artifact.published") if e.actor == record.author]
+    at = next((i for i, e in enumerate(pubs) if e.payload.get("artifact_id") == record.artifact_id),
+              None)
+    if at is None:
+        return None
+    lo, hi = (pubs[at - 1].id if at else 0), pubs[at].id
+    calls = [e for e in ws.events.list("model.call", since_id=lo)
+             if e.id < hi and e.payload["role"] == record.author]
+    return _tally(calls) if calls else None
