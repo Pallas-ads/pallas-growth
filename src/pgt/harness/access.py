@@ -81,7 +81,8 @@ def connect(ws: Workspace, account: dict, n: int, actor: str = "user",
             sim_day: int | None = None) -> None:
     _owner_only(ws, actor, "connect an ad account")
     with ws.events._transaction():
-        ws.events.append("account.connected", actor, dict(account), sim_day=sim_day)
+        ws.events.append("account.connected", actor, {**account, "level": n},
+                         sim_day=sim_day)
         set_level(ws, n, actor, sim_day)
 
 

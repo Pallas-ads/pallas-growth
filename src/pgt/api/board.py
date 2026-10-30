@@ -240,10 +240,20 @@ def _table(account, rows, target: float) -> list[dict]:
     return out
 
 
+def _which(ws: Workspace) -> dict:
+    """The connected account as the dashboard names it: the sandbox unless a real one is in use."""
+    from pgt.harness import access
+
+    conn = access.connection(ws) or {}
+    if conn.get("kind") == "meta":
+        return {"account": conn.get("account_id"), "account_name": conn.get("name"), "real": True}
+    return {"account": SANDBOX_ACCOUNT, "account_name": access.SANDBOX["name"], "real": False}
+
+
 def dashboard(ws: Workspace, account, days: int = 7) -> dict:
     facts = ws.facts.current()
     if account is None or account.day == 0:
-        return {"ready": False, "account": SANDBOX_ACCOUNT}
+        return {"ready": False, **_which(ws)}
     days = days if days in RANGES else 7
     end = account.day
     start = max(1, end - days + 1)
@@ -264,7 +274,7 @@ def dashboard(ws: Workspace, account, days: int = 7) -> dict:
     state = account.state()
     return {
         "ready": True,
-        "account": SANDBOX_ACCOUNT,
+        **_which(ws),
         "currency": state.currency,
         "days": days,
         "start": start,

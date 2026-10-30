@@ -23,6 +23,19 @@ SCHEMA = {
     },
     "required": ["ad_account_id", "level"],
 }
+# The official server's draft read: same tool, object_state "draft", rows under ad_drafts.
+DRAFT_SCHEMA = {**SCHEMA, "properties": {**SCHEMA["properties"],
+                                         "object_state": {"type": "string"},
+                                         "cursor": {"type": "string"}},
+                "required": ["ad_account_id"]}
+DRAFTS = [
+    {"id": "d-c1", "name": "Spring launch", "objective": "OUTCOME_APP_PROMOTION",
+     "adsets": [{"id": "d-s1", "name": "US 25-44", "daily_budget": {"value": 40, "unit": "USD"},
+                 "targeting": {"geo_locations": {"countries": ["US"]}},
+                 "ads": [{"id": "d-a1", "name": "Hook A", "status": "PAUSED"},
+                         {"id": "d-a2", "name": "Hook B", "status": "PAUSED"}]}]},
+    {"id": "d-c2", "name": "Retargeting", "adsets": []},
+]
 
 
 class FakeMcp:
@@ -57,6 +70,14 @@ class FakeMcp:
         if self.fail_next:
             self.fail_next = False
             reply = {"isError": True, "content": [{"type": "text", "text": "Rate limited"}]}
+            return {"jsonrpc": "2.0", "id": body["id"], "result": reply}, {}
+        if args.get("object_state") == "draft":
+            assert "level" not in args and "fields" not in args
+            page = int(args.get("cursor", "0"))  # one campaign per page, cursor at the top
+            content = {"ad_drafts": json.dumps(DRAFTS[page:page + 1])}
+            if page + 1 < len(DRAFTS):
+                content["next_cursor"] = str(page + 1)
+            reply = {"content": [{"type": "text", "text": "ignored"}], "structuredContent": content}
             return {"jsonrpc": "2.0", "id": body["id"], "result": reply}, {}
         rows = self._rows(args)
         rows = [{k: _without(v, self.drop) for k, v in r.items() if k not in self.drop}
@@ -257,3 +278,37 @@ def test_streamed_replies_are_read():
     text = ('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
             'event: message\ndata: {"jsonrpc":"2.0","id":3,"result":{"tools":[]}}\n\n')
     assert _sse_message(text, 3) == {"jsonrpc": "2.0", "id": 3, "result": {"tools": []}}
+
+
+def test_drafts_are_read_page_by_page_as_a_tree():
+    graph = CountingGraph()
+    acc = account(graph, FakeMcp(graph, schema=DRAFT_SCHEMA))
+    drafts = acc.drafts()
+    assert [d["name"] for d in drafts] == ["Spring launch", "Retargeting"]
+    spring = drafts[0]
+    assert spring["level"] == "campaign" and spring["details"]["objective"] == "OUTCOME_APP_PROMOTION"
+    (adset,) = spring["children"]
+    assert adset["level"] == "ad set" and adset["details"]["daily_budget"] == 40
+    assert adset["nested"] == ["targeting"]
+    assert [(a["level"], a["name"], a["status"]) for a in adset["children"]] == [
+        ("ad", "Hook A", "PAUSED"), ("ad", "Hook B", "PAUSED")]
+    assert acc.read_sources()["reads"]["drafts"] == "mcp" and graph.reads == []
+    from pgt.ads.ads_mcp import draft_counts
+    assert draft_counts(drafts) == {"campaign": 2, "ad set": 1, "ad": 2}
+
+
+def test_drafts_need_the_mcp_draft_read():
+    from pgt.ads.ads_mcp import McpError
+
+    acc = account()  # this schema has no object_state
+    with pytest.raises(McpError, match="object_state"):
+        acc.drafts()
+    assert acc.read_sources()["reads"]["drafts"] == "none"
+
+
+def test_live_rows_in_answer_to_a_draft_read_are_refused():
+    from pgt.ads.ads_mcp import McpError, _draft_page
+
+    with pytest.raises(McpError, match="live entities"):
+        _draft_page({"ad_entities": "[]"})
+    assert _draft_page({"ad_drafts": "[]"}) == []

@@ -336,9 +336,6 @@ def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict
     p = e.payload
     if e.type == "access.level":
         return e.actor, f"Set the team to {access.describe(p['level'])}. {LEVEL_TEXT[p['level']]}", None
-    if e.type == "account.connected":
-        what = "Sandbox, synthetic data." if p.get("kind") == "sandbox" else "Read-only."
-        return e.actor, f"Connected {p.get('name')} ({p.get('account_id')}). {what}", None
     if e.type == "account.disconnected":
         return e.actor, "Disconnected the ad account.", None
     if e.type == "changeset.handed_off":
@@ -358,6 +355,18 @@ def _setting(ws: Workspace, idx: Index, e: Event, names) -> tuple[str, str, dict
     if e.type == "refresh.done":
         return "growth_lead", " ".join(p.get("lines", [])), None
     return None
+
+
+def _connected(p: dict) -> str:
+    """'Connected Test (act_42) · real account · L1 Propose'."""
+    from pgt.harness import access
+
+    level = p.get("level")
+    how = "synthetic data" if p.get("kind") == "sandbox" else "real account"
+    parts = [f"Connected {p.get('name')} ({p.get('account_id')})", how]
+    if level is not None:
+        parts.append(access.describe(level))
+    return " · ".join(parts)
 
 
 def _fact_change(key: str, old, new) -> str:
@@ -387,6 +396,7 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
     by_id: dict[int, dict] = {}
     fold: list[dict] = []
     fold_loop: str | None = None
+    connected_at = -2
 
     def flush():
         nonlocal fold
@@ -490,6 +500,14 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
                     {"id": e.id, "ts": e.ts, "who": role(e.actor), "text": text})
             else:
                 add(_msg(e, e.actor, text))
+            continue
+        if e.type == "account.connected":  # a line across the room, with the level set with it
+            flush()
+            connected_at = e.id if "level" in p else -2
+            items.append({"kind": "day", "id": e.id, "label": _connected(p),
+                          "sim_day": e.sim_day})
+            continue
+        if e.type == "access.level" and e.id == connected_at + 1:
             continue
         if e.type in SETTING_EVENTS:
             said = _setting(ws, idx, e, names)

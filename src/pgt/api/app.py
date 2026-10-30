@@ -123,13 +123,15 @@ def _real_db(team: Team, account_id: str) -> str:
     return str(Path(team.db).with_name(f"meta-{account_id}.db"))
 
 
-def use_real_account(team: Team, account: dict, transport=None, mcp_transport=None) -> dict:
+def use_real_account(team: Team, account: dict, transport=None, mcp_transport=None,
+                     rules: HouseRules | None = None) -> dict:
     """Move the team onto a real ad account, in a workspace of its own.
 
     Reads go through Meta's Ads MCP (META_ADS_MCP=0 turns it off), with the Graph API as the
     fallback; writes go through the Graph API. The sandbox's history stays in its own file and
     comes back on disconnect. The token stays in memory; the workspace keeps only the account id,
-    the origin date and PGT's own writes."""
+    the origin date and PGT's own writes. A first connect starts the team cold: the sandbox's
+    facts with the house rules chosen at setup, and no history."""
     from pgt.ads.ads_mcp import AdsMcp
     from pgt.ads.graph import Graph
     from pgt.ads.meta_account import MetaAccount
@@ -145,7 +147,10 @@ def use_real_account(team: Team, account: dict, transport=None, mcp_transport=No
     ws = Workspace(_real_db(team, account["account_id"]))
     if ws.facts.version == 0:
         # Start from the sandbox's facts; the owner corrects them in Settings.
-        ws.facts.set(team.ws.facts.current(), "user")
+        facts = team.ws.facts.current()
+        if rules is not None:
+            facts = facts.model_copy(update={"house_rules": rules})
+        ws.facts.set(facts, "user")
     earlier = [e for e in ws.events.list("account.connected")
                if e.payload.get("account_id") == account["account_id"] and e.payload.get("origin")]
     lookback = int(os.environ.get("META_LOOKBACK_DAYS", "7"))
@@ -198,6 +203,16 @@ class Rules(BaseModel):
     min_days_between_budget_changes: int | None = Field(None, ge=0, le=30)
     min_spend_multiple_before_pause: float | None = Field(None, ge=0, le=10)
     protect_learning_phase: bool | None = None
+
+
+def _rules(current: HouseRules, body: Rules) -> HouseRules:
+    values = current.model_dump()
+    if body.preset:
+        values.update(PRESETS[body.preset], preset=body.preset)
+    fields = body.model_dump(exclude_none=True, exclude={"preset"})
+    if fields:
+        values.update(fields, preset="custom")
+    return HouseRules(**values)
 
 
 class Facts(BaseModel):
@@ -470,13 +485,7 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         if team.busy:
             raise HTTPException(409, f"The team is busy: {team.busy}. Change the rules after.")
         facts = team.ws.facts.current()
-        values = facts.house_rules.model_dump()
-        if body.preset:
-            values.update(PRESETS[body.preset], preset=body.preset)
-        fields = body.model_dump(exclude_none=True, exclude={"preset"})
-        if fields:
-            values.update(fields, preset="custom")
-        rules = HouseRules(**values)
+        rules = _rules(facts.house_rules, body)
         if rules == facts.house_rules:
             return team.ws.facts.version
         return team.ws.facts.set(facts.model_copy(update={"house_rules": rules}), "user")
@@ -523,16 +532,24 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
                 raise HTTPException(409, "Sign in with Facebook and grant this ad account first")
             if team.busy:
                 raise HTTPException(409, f"The team is busy: {team.busy}. Connect after.")
+            rules = _rules(team.ws.facts.current().house_rules, body.rules) if body.rules \
+                else None
             account = use_real_account(team, granted[body.account_id], app.state.graph_transport,
-                                       app.state.mcp_transport)
+                                       app.state.mcp_transport, rules)
+        cold = team.real and not team.ws.events.list("account.connected")
         try:
             access.connect(team.ws, account, body.level, sim_day=_day())
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
-        if body.rules:
+        if body.rules and not cold:  # a first connect already started with these rules
             before = team.ws.facts.version
             _set_rules(body.rules)
             _refresh(before)
+        if team.real:
+            from pgt.loops.kickoff import kickoff
+
+            name = account.get("name") or account["account_id"]
+            team.run("Reading the account", kickoff(team.ws, team.account, name))
         return {"ok": True}
 
     @app.post("/api/access/level")
@@ -590,6 +607,21 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
         except McpError as exc:
             tools = {"error": str(exc)}
         return {**tools, **team.account.read_sources()}
+
+    @app.get("/api/drafts")
+    async def drafts():
+        """Ads Manager drafts on the connected real account, read only. The sandbox has none."""
+        if not team.real:
+            return {"available": False, "reason": "The sandbox has no Ads Manager drafts",
+                    "drafts": []}
+        from pgt.ads.ads_mcp import McpError, draft_counts
+
+        try:
+            found = await asyncio.to_thread(team.account.drafts)
+        except McpError as exc:
+            return {"available": False, "reason": str(exc), "drafts": []}
+        return {"available": True, "reason": None, "drafts": found,
+                "counts": draft_counts(found)}
 
     @app.get("/api/dashboard")
     async def dashboard(days: int = 7):

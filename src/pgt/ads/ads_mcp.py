@@ -160,6 +160,7 @@ _ARG_NAMES = {
     "time_increment": ("time_increment",),
     "filtering": ("filtering", "filters"),
     "limit": ("limit",),
+    "object_state": ("object_state",),
 }
 # Optional arguments the official server documents, sent when its schema has them. Reads are
 # plain lookups: no added benchmarks, only the fields asked for.
@@ -172,7 +173,7 @@ _ALIASES = {"adset_id": ("ad_set_id",), "date_start": ("date", "day_start"),
 
 def _decoded(value):
     """Some replies carry their rows as a JSON string."""
-    if isinstance(value, str) and value.lstrip().startswith("["):
+    if isinstance(value, str) and value.lstrip().startswith(("[", "{")):
         try:
             return json.loads(value)
         except ValueError:
@@ -258,12 +259,13 @@ class McpReads:
             return str(value)
         return value
 
-    def _rows(self, args: dict) -> list[dict]:
+    def _rows(self, args: dict, page=None) -> list[dict]:
         rows: list[dict] = []
+        page = page or self._page
         can_page = "cursor" in (self._schema().get("properties") or {})
         for _ in range(_MAX_PAGES):
             payload = self._mcp.call(ENTITIES_TOOL, args)
-            rows += self._page(payload)
+            rows += page(payload)
             cursor = _next_cursor(payload)
             if not cursor or not can_page:
                 return rows
@@ -372,3 +374,81 @@ class McpReads:
                       "impressions", "reach")
         self._has_results(rows, "daily insights")
         return rows
+
+    def drafts(self) -> list[dict]:
+        """Unpublished changes staged in Ads Manager, as the server nests them. A draft has not
+        run, so there are no metrics to ask for."""
+        args = self._args(("account", "object_state"), "entity_lookup", account=self.account_id,
+                          object_state="draft")
+        return self._rows(args, _draft_page)
+
+
+def _draft_page(payload) -> list[dict]:
+    """Drafts come back under `ad_drafts`; live entities there mean the draft read was ignored."""
+    if not isinstance(payload, dict):
+        raise McpError(f"{ENTITIES_TOOL} replied to the draft read in a shape PGT does not read")
+    values = {k: _decoded(v) for k, v in payload.items()}
+    found = values.get("ad_drafts")
+    if isinstance(found, dict):
+        found = [found]
+    if isinstance(found, list):
+        return [d for d in found if isinstance(d, dict)]
+    if "ad_entities" in values:
+        raise McpError(f"{ENTITIES_TOOL} returned live entities instead of drafts")
+    if "ad_drafts" in values and found is None:
+        return []
+    raise McpError(f"{ENTITIES_TOOL} did not return ad_drafts")
+
+
+# Where a child list sits tells its level when the node does not say.
+_DRAFT_LEVELS = {"campaigns": "campaign", "adsets": "ad set", "ad_sets": "ad set", "ads": "ad"}
+_NEXT_LEVEL = {"account": "campaign", "campaign": "ad set", "ad set": "ad", "ad": "ad"}
+_DRAFT_IDS = ("id", "draft_id", "object_id", "campaign_id", "adset_id", "ad_id")
+_DRAFT_SKIP = {"name", "status", "effective_status", "level", "object_type", "entity_type"}
+_MAX_DETAILS = 12
+
+
+def _draft_level(raw) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    word = _norm(raw)
+    return {"campaign": "campaign", "adset": "ad set", "ad": "ad"}.get(word.removesuffix("s"))
+
+
+def draft_node(node: dict, level: str = "campaign") -> dict:
+    """One draft in a fixed shape the app shows: its id, name, level, status, the plain values
+    it carries and its children. Nested objects (targeting, creative specs) are only named."""
+    level = (_draft_level(node.get("level")) or _draft_level(node.get("object_type"))
+             or _draft_level(node.get("entity_type")) or level)
+    children: list[dict] = []
+    details: dict = {}
+    nested: list[str] = []
+    for key, value in node.items():
+        value = _decoded(value)
+        if key in _DRAFT_SKIP:
+            continue
+        if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+            child = _DRAFT_LEVELS.get(key, _NEXT_LEVEL[level])
+            children += [draft_node(v, child) for v in value]
+        elif isinstance(value, dict) and "value" in value:
+            details[key] = value["value"]
+        elif isinstance(value, dict | list):
+            nested.append(key)
+        elif value not in (None, "") and len(details) < _MAX_DETAILS:
+            details[key] = value
+    ident = next((str(node[k]) for k in _DRAFT_IDS if node.get(k) not in (None, "")), "")
+    details.pop("id", None)
+    return {"id": ident, "name": str(node.get("name") or ""), "level": level,
+            "status": node.get("status") or node.get("effective_status") or None,
+            "details": details, "nested": nested, "children": children}
+
+
+def draft_counts(drafts: list[dict]) -> dict[str, int]:
+    """How many campaigns, ad sets and ads a draft tree holds."""
+    counts = {"campaign": 0, "ad set": 0, "ad": 0}
+    stack = list(drafts)
+    while stack:
+        node = stack.pop()
+        counts[node["level"]] = counts.get(node["level"], 0) + 1
+        stack += node["children"]
+    return counts

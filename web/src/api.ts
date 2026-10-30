@@ -76,8 +76,9 @@ export type CampaignRow = Metrics & { id: string; name: string; status: string; 
   in_learning: boolean; budget: number; test_id: string | null; rows: number; ads: AdRow[] };
 export type Action = { n: number; day: number; who: Who; verb: string; text: string;
                        evidence: string[]; link: Link | null };
-export type DashboardData = { ready: false; account: string } | {
-  ready: true; account: string; currency: string; days: number; start: number; end: number;
+type Which = { account: string; account_name: string; real: boolean };
+export type DashboardData = (Which & { ready: false }) | (Which & {
+  ready: true; currency: string; days: number; start: number; end: number;
   short: boolean; pulled: { day: number | null; ts: string } | null; target: number;
   result_name: string; kpis: Kpi[];
   evidence: { rows: number; first: string | null; last: string | null; fields: string;
@@ -85,7 +86,13 @@ export type DashboardData = { ready: false; account: string } | {
   series: { day: number; spend: number; results: number; cpr: number | null }[];
   actions: Action[]; after: string | null; campaigns: CampaignRow[];
   daily_total: number; daily_cap: number;
-};
+});
+
+/** Ads Manager drafts on a real account, read only. */
+export type DraftNode = { id: string; name: string; level: "campaign" | "ad set" | "ad"; status: string | null;
+                          details: Record<string, string | number | boolean>; nested: string[]; children: DraftNode[] };
+export type Drafts = { available: boolean; reason: string | null; drafts: DraftNode[];
+                       counts?: Record<string, number> };
 
 /** Creative Assets: every image the team made, with how it was made. */
 export type StepModel = { model: string; provider: string; calls: number | null; cost: number | null };
@@ -177,6 +184,7 @@ export const api = {
   setFacts: (patch: FactsPatch) =>
     call<{ fact_version: number; refresh: boolean }>("/api/facts", { method: "POST", body: JSON.stringify(patch) }),
   dashboard: (days: number) => call<DashboardData>(`/api/dashboard?days=${days}`),
+  drafts: () => call<Drafts>("/api/drafts"),
   assets: () => call<{ items: Asset[]; account: string }>("/api/assets"),
   upload: async (file: File) => {
     const res = await fetch(`/api/assets/upload?name=${encodeURIComponent(file.name)}`,
