@@ -5,8 +5,9 @@ pgt weekly [--yes] [--live] [--provider meta|mixed] [--db path] [--out runs/medi
 pgt serve [--port 8000] [--db path] [--live] [--provider meta|mixed] [--cap 5] [--public] [--cold]
           [--ssl-certfile cert.pem --ssl-keyfile key.pem]
 
---provider mixed runs the text roles on Muse Spark (open weights) on Baseten and keeps the
-Creative Strategist (hosted web search) and image work on the Meta API.
+Live runs default to --provider mixed: every role runs on Muse Spark Open (open weights) on
+Baseten, except the Creative Strategist's hosted web search and the image work (Muse Image,
+SAM 3.1), which stay on the Meta API. --provider meta runs every role on the Meta API.
 """
 
 from __future__ import annotations
@@ -29,12 +30,12 @@ def main(argv: list[str] | None = None) -> None:
     sim.add_argument("--db", default=":memory:", help="SQLite file for the workspace")
     sim.add_argument("--live", action="store_true", help="Call Muse (costs money; needs a key)")
     sim.add_argument("--model", default="muse-spark-1.3")
-    sim.add_argument("--provider", choices=["meta", "mixed"], default="meta")
+    sim.add_argument("--provider", choices=["meta", "mixed"], default="mixed")
     sim.add_argument(
         "--effort",
         choices=["low", "medium", "high", "xhigh"],
         default="medium",
-        help="Reasoning effort on Baseten (--provider mixed)",
+        help="Reasoning effort on Baseten",
     )
     sim.add_argument("--plant-injection", action="store_true")
     week = sub.add_parser("weekly", help="Simulate a week, then run the weekly review")
@@ -43,12 +44,12 @@ def main(argv: list[str] | None = None) -> None:
     week.add_argument("--out", default="runs/media", help="Folder for creative images")
     week.add_argument("--live", action="store_true", help="Call Muse (costs money; needs a key)")
     week.add_argument("--model", default="muse-spark-1.3")
-    week.add_argument("--provider", choices=["meta", "mixed"], default="meta")
+    week.add_argument("--provider", choices=["meta", "mixed"], default="mixed")
     week.add_argument(
         "--effort",
         choices=["low", "medium", "high", "xhigh"],
         default="medium",
-        help="Reasoning effort on Baseten (--provider mixed)",
+        help="Reasoning effort on Baseten",
     )
     week.add_argument("--yes", action="store_true", help="Approve both steps without asking")
     serve = sub.add_parser("serve", help="Run the web app (offline unless --live)")
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--web", default="web/dist", help="Built frontend to serve, if present")
     serve.add_argument("--live", action="store_true", help="Call Muse (costs money; needs a key)")
     serve.add_argument("--model", default="muse-spark-1.3")
-    serve.add_argument("--provider", choices=["meta", "mixed"], default="meta")
+    serve.add_argument("--provider", choices=["meta", "mixed"], default="mixed")
     serve.add_argument("--effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     serve.add_argument(
         "--public", action="store_true", default=bool(os.environ.get("PGT_PUBLIC")),
@@ -96,7 +97,7 @@ def _models(args):
             from pgt.llm.routing import mixed
 
             model = mixed(model, chat_model(baseten_client(), effort=args.effort))
-            print(f"Live run: text roles on {BASETEN_MODEL} (Baseten), web search on {args.model}.")
+            print(f"Live run: every role on {BASETEN_MODEL} (Baseten), web search on {args.model}.")
         else:
             print(f"Live run on {args.model}.")
         return model, client, None
@@ -122,7 +123,7 @@ def _serve(args) -> None:
     if args.live:
         team = live_team(db, str(run_dir / "media"), args.model, args.provider, args.effort,
                          args.cap)
-        where = "text roles on Baseten, web search and images on the Meta API" \
+        where = "Muse Spark Open on Baseten; web search and images on the Meta API" \
             if args.provider == "mixed" else f"{args.model} on the Meta API"
         print(f"Live run: {where}. Spend cap ${args.cap:g} at list price.")
     else:
