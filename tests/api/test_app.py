@@ -76,16 +76,46 @@ def test_approving_plan_then_change_set_creates_paused_ads(client):
     assert client.post("/api/approve/week1/change_set").status_code == 409
 
 
-def test_send_back_and_messages_land_in_the_thread(client):
+def test_send_back_redoes_the_plan_and_asks_again(client):
     room = client.get("/api/room").json()["items"]
     root = next(i for i in room if i["kind"] == "msg" and i["mention"])
     client.post("/api/messages", json={"text": "Why lunch break?", "thread": root["id"]})
-    assert client.post("/api/send-back/week1/test_plan", json={"note": "Lower the budget"}).status_code == 200
-    assert _waiting(client) == []
+    assert client.post("/api/send-back/week1/test_plan", json={"note": " "}).status_code == 400
+    res = client.post("/api/send-back/week1/test_plan", json={"note": "Lower the budget"})
+    assert res.status_code == 200 and res.json()["redo"] is True
+    _idle(client)
     room = client.get("/api/room").json()["items"]
     root = next(i for i in room if i["id"] == root["id"])
     assert [r["text"] for r in root["replies"]] == ["Why lunch break?",
                                                      "Sent back: Lower the budget"]
+    # The Growth Lead redrafts with the note, and the new version waits on the owner.
+    assert [d["title"] for d in _waiting(client)] == ["Test plan · Week 1 · v2"]
+    v2 = client.get("/api/deliverables/week1/test_plan").json()
+    assert v2["status"] == "wait"
+    assert any("Redo the test plan with the owner's note: Lower the budget" in str(i)
+               for i in room if i["kind"] == "fold")
+    assert client.post("/api/approve/week1/test_plan").status_code == 200
+    _idle(client)
+
+
+def test_send_back_redoes_the_new_ads_as_new_versions(client):
+    assert client.post("/api/approve/week1/test_plan").status_code == 200
+    _idle(client)
+    before = client.get("/api/deliverables/week1/change_set").json()
+    note = "Use a calmer headline"
+    assert client.post("/api/send-back/week1/change_set", json={"note": note}).status_code == 200
+    _idle(client)
+    assert [d["title"] for d in _waiting(client)] == ["Change set · Week 1 · v2"]
+    after = client.get("/api/deliverables/week1/change_set").json()
+    old_url = before["creatives"][0]["images"][0]["url"]
+    new_url = after["creatives"][0]["images"][0]["url"]
+    assert "-c1/" in old_url and "-c2/" in new_url
+    assert [a["ad"] for a in before["ads"]] != [a["ad"] for a in after["ads"]]
+    # Earlier images stay on disk; the redo writes its own.
+    assert client.get(old_url).status_code == 200 and client.get(new_url).status_code == 200
+    assert client.post("/api/approve/week1/change_set").status_code == 200
+    _idle(client)
+    assert client.get("/api/deliverables/week1/change_set").json()["status"] == "applied"
 
 
 def test_media_stays_inside_the_media_folder(client):

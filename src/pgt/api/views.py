@@ -431,7 +431,10 @@ def room(ws: Workspace, account=None, idx: Index | None = None) -> list[dict]:
                 reply(roots.get(p["key"]), e, "user", f"Approved {name}.")
             continue
         if e.type == "approval.returned":
-            reply(roots.get(p["key"]), e, "user", f"Sent back: {p.get('note', '')}".strip())
+            text = f"Sent back: {p.get('note', '')}".strip()
+            if p.get("redo") is False:
+                text += " (This day has passed, so nothing is redone. The next check starts fresh.)"
+            reply(roots.get(p["key"]), e, "user", text)
             continue
         if e.type == "changeset.applied":
             record = ws.artifacts.get(e.refs[0]) if e.refs else None

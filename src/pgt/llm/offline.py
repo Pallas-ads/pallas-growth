@@ -143,7 +143,16 @@ def _changes(inputs: dict) -> ChangeSetDraft:
                     )
                 )
     summary = "Act on today's findings." if changes else "No change today: nothing calls for one."
-    return ChangeSetDraft(summary=summary, changes=changes)
+    return ChangeSetDraft(summary=_revised(inputs, summary), changes=changes)
+
+
+def _owner_notes(inputs: dict) -> list[str]:
+    return [i for i in inputs.get("review_issues_to_fix", []) if i.startswith("From the owner")]
+
+
+def _revised(inputs: dict, summary: str) -> str:
+    """Mark a redo the owner asked for. The stand-in cannot act on the note's meaning."""
+    return f"Redone after the owner's note. {summary}" if _owner_notes(inputs) else summary
 
 
 def _change(kind, target_id, finding, reason, budget=None) -> Change:
@@ -291,7 +300,8 @@ def _plan(inputs: dict) -> TestPlanDraft:
                 ),
             )
         )
-    return TestPlanDraft(summary="Two creative tests drawn from this week's findings.", tests=tests)
+    summary = _revised(inputs, "Two creative tests drawn from this week's findings.")
+    return TestPlanDraft(summary=summary, tests=tests)
 
 
 def _creative_copy(inputs: dict, outputs: list[dict]) -> CreativeCopy | FunctionCall:
@@ -303,9 +313,12 @@ def _creative_copy(inputs: dict, outputs: list[dict]) -> CreativeCopy | Function
         )
     evidence_ids = next((o["evidence_ids"] for o in outputs if o.get("evidence_ids")), [])
     brief = test["brief"]
+    redo = bool(_owner_notes(inputs))
     return CreativeCopy(
-        name=f"{brief['angle']} v1",
-        headline=brief["hook"][:40],
+        name=f"{brief['angle']} {'v2' if redo else 'v1'}",
+        # A rule-based stand-in cannot read the note; it switches to the key message so the
+        # redo is visibly a new version. Muse Spark reads the note in live runs.
+        headline=(brief["key_message"] if redo else brief["hook"])[:40],
         primary_text="Short home workouts that fit your day. Keep your streak going.",
         description="Start your free trial",
         claims=[Claim(text=brief["key_message"], evidence_ids=evidence_ids, source_urls=[])],

@@ -255,12 +255,39 @@ def create_app(team: Team, web_dist: str | Path | None = None, seed_days: int | 
 
     @app.post("/api/send-back/{key:path}")
     async def send_back(key: str, body: Note):
+        """Record the owner's note, then have the role that made this version redo it with the
+        note as the first issue to fix. The new version comes back for approval as usual."""
+        from pgt.loops.daily import revise_day
+        from pgt.loops.weekly import produce_week, revise_plan
+
         record = _record(key)
+        note = body.note.strip()
         if views.Index.build(team.ws).waiting(record) is None:
             raise HTTPException(409, "This version is not waiting on you")
-        team.ws.events.append("approval.returned", "user", {"key": key, "note": body.note.strip()},
+        if not note:
+            raise HTTPException(400, "Say what should change, so the team knows what to redo")
+        if team.busy:
+            raise HTTPException(409, f"The team is busy: {team.busy}")
+        period, _, kind = key.partition("/")
+        redo, label = None, None
+        if period.startswith("week") and kind == "test_plan":
+            label = "Redoing the test plan"
+            redo = revise_plan(team.ws, team.account, team.model, note, week=int(period[4:]),
+                               meter=team.meter)
+        elif period.startswith("week") and kind == "change_set":
+            label = "Redoing the creative"
+            redo = produce_week(team.ws, team.account, team.model, team.media, team.media_dir,
+                                week=int(period[4:]), meter=team.meter, note=note)
+        elif (period.startswith("day") and kind == "change_set" and team.account
+              and int(period[3:]) == team.account.day):
+            label = "Redoing today's change set"
+            redo = revise_day(team.ws, team.account, team.model, note, meter=team.meter)
+        team.ws.events.append("approval.returned", "user",
+                              {"key": key, "note": note, "redo": redo is not None},
                               refs=[record.artifact_id], sim_day=record.sim_day)
-        return {"ok": True}
+        if redo is not None:
+            team.run(label, redo)
+        return {"ok": True, "redo": redo is not None}
 
     @app.post("/api/messages")
     async def post_message(body: Message):

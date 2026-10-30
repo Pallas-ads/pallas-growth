@@ -381,9 +381,15 @@ def _made(ws, idx, account, media_dir, record, plans, facts) -> dict:
         {"title": "New background, three sizes", "sub": copy.get("image_prompt", ""),
          "model": image, "final": False},
     ]
-    for e in ws.events.list("review.redo", loop_id=loop):
+    returned = [e for e in ws.events.list("approval.returned")
+                if e.payload["key"] == f"{week}/change_set"]
+    redos = ws.events.list("review.redo", loop_id=loop)
+    for e in sorted([*redos, *returned], key=lambda e: e.id):
         p = e.payload
-        if str(p.get("subject", "")).startswith(f"{test_id}-c"):
+        if e.type == "approval.returned":
+            steps.append({"title": "Owner sent the new ads back", "sub": p.get("note", ""),
+                          "model": None, "final": False, "by": OWNER})
+        elif str(p.get("subject", "")).startswith(f"{test_id}-c"):
             steps.append({"title": f"Sent back draft {p.get('attempt', '')}".strip(),
                           "sub": "; ".join(p.get("issues", [])), "model": None, "final": False,
                           "by": role(p.get("by", "reviewer") if p.get("by") != "code"
