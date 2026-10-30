@@ -143,6 +143,42 @@ def test_rows_sent_as_a_json_string_with_spend_as_amount_spent_are_read():
     assert [r.spend for r in rows] == [40, 45]
 
 
+class PagedMcp(FakeMcp):
+    """The official server's optional arguments, and ad sets one per page."""
+
+    def __call__(self, url, headers, body):
+        reply, head = super().__call__(url, headers, body)
+        args = body.get("params", {}).get("arguments", {})
+        if body["method"] == "tools/call" and args.get("level") == "ADSET":
+            rows = reply["result"]["structuredContent"]["data"]
+            page = int(args.get("cursor", "0"))
+            content = {"data": rows[page:page + 1]}
+            if page + 1 < len(rows):
+                content["pagination"] = {"next_cursor": str(page + 1)}
+            reply["result"]["structuredContent"] = content
+        return reply, head
+
+
+def test_ad_sets_are_read_across_pages_with_the_documented_arguments():
+    graph = CountingGraph()
+    schema = {**SCHEMA, "properties": {
+        **SCHEMA["properties"], "cursor": {"type": "string"},
+        "client_conversation_id": {"type": "string"},
+        "include_additional_context": {"type": "boolean"},
+        "reporting_purpose": {"type": "array", "items": {"type": "string"}}}}
+    fake = PagedMcp(graph, schema=schema)
+    acc = account(graph, fake)
+    assert [c.campaign_id for c in acc.state().campaigns] == ["111", "222"]
+    pages = [c for c in fake.calls if c["level"] == "ADSET"]
+    assert [c.get("cursor") for c in pages] == [None, "1", "2"]
+    first = pages[0]
+    assert len(first["client_conversation_id"]) == 20 and first["client_conversation_id"].isalnum()
+    assert {c["client_conversation_id"] for c in fake.calls} == {first["client_conversation_id"]}
+    assert first["include_additional_context"] is False
+    assert first["reporting_purpose"] == ["entity_lookup"]
+    assert "advertiser_job" not in first  # not in this schema, so not sent
+
+
 def test_a_read_the_mcp_cannot_make_falls_back_to_the_graph():
     graph = CountingGraph()
     schema = {**SCHEMA, "properties": {k: v for k, v in SCHEMA["properties"].items()
