@@ -22,7 +22,7 @@ export const ADDRESSABLE: { actor: string; code: string; name: string; does: str
 ];
 
 export function avatar(code: string | null | undefined): string {
-  if (code === "YOU") return "/owner.jpg";
-  if (code && (CODES as readonly string[]).includes(code)) return `/avatars/${code}.svg`;
-  return "/pallas-logo.png"; // System and house rules speak as the team itself.
+  if (code === "YOU") return "owner.jpg";
+  if (code && (CODES as readonly string[]).includes(code)) return `avatars/${code}.svg`;
+  return "pallas-logo.png"; // System and house rules speak as the team itself.
 }
