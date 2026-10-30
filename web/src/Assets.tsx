@@ -2,7 +2,7 @@
 // calls, what the Reviewer sent back), and how it did once launched. Also the product photos the
 // team starts from, and anything the owner uploads.
 import { Fragment, useRef, useState, type ReactNode } from "react";
-import { api, clock, useData, type Asset, type Mode } from "./api";
+import { api, clock, REPLAY, useData, type Asset, type Mode } from "./api";
 import { go, type Route } from "./route";
 import { OWNER } from "./ui";
 
@@ -164,7 +164,7 @@ export default function Assets({ tick, route, sidebar, mode }: {
         )}
         <div className="assets">
           {shown.map((a) => <Card key={a.id} a={a} on={a.id === openId} />)}
-          {filter !== "made" && <Drop onDone={() => setBump((b) => b + 1)} />}
+          {filter !== "made" && !REPLAY && <Drop onDone={() => setBump((b) => b + 1)} />}
         </div>
       </main>
       {open && <Side a={open} mode={mode} />}
