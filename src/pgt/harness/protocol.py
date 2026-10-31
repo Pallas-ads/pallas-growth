@@ -1,4 +1,4 @@
-"""How roles talk to each other (PRD §8.3): handoffs, ask/answer, escalation, fact proposals.
+"""How roles talk to each other: handoffs, ask/answer, escalation, fact proposals.
 
 Every message is an event, so the Team Room can show it and a run can be replayed from the log.
 """

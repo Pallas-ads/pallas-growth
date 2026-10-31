@@ -1,6 +1,6 @@
 # Framework spike scorecard
 
-Criteria and weights come from PRD §8.6. Scored criteria get 1–5 points. Run on Oct 28, 2026 with pydantic-ai-slim 2.63.0 and openai-agents 0.24.0.
+Criteria and weights were fixed before either build. Scored criteria get 1–5 points. Run on Oct 28, 2026 with pydantic-ai-slim 2.63.0 and openai-agents 0.24.0.
 
 ## Results
 

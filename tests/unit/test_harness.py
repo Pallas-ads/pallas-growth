@@ -1,4 +1,4 @@
-"""Acceptance tests for harness storage, the policy gate and checks (docs/tasks/day2-harness.md)."""
+"""Acceptance tests for harness storage, the policy gate and checks."""
 
 import sqlite3
 

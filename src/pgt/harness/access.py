@@ -1,4 +1,4 @@
-"""Which ad account the team works on, and how much it may do there (PRD §4.4).
+"""Which ad account the team works on, and how much it may do there.
 
 Both are events, so every change shows in the room's history. Only the owner may change them.
 The API checks the level before it accepts an approval, and the Operator checks it again in code

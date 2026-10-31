@@ -1,4 +1,4 @@
-"""Shared facts and house rules (PRD §4.3, §8.3). Settings, not code."""
+"""Shared facts and house rules. Settings, not code."""
 
 from __future__ import annotations
 

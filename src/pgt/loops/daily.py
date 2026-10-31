@@ -1,4 +1,4 @@
-"""The daily check loop (PRD §5.1): Analyst -> Reviewer -> Media Buyer -> gate -> Reviewer -> brief."""
+"""The daily check loop: Analyst -> Reviewer -> Media Buyer -> gate -> Reviewer -> brief."""
 
 from __future__ import annotations
 

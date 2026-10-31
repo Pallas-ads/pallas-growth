@@ -1,4 +1,4 @@
-"""Re-run only what a fact change made stale (PRD §11 Scenario 4).
+"""Re-run only what a fact change made stale (acceptance scenario 4).
 
 Changing a fact marks every deliverable that used it, and everything built on those, as stale.
 This pass then redoes the cheap, mechanical part in code and keeps whatever came out the same,
