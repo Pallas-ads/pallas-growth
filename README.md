@@ -4,7 +4,7 @@ An always-on AI growth team for Meta ads, built on Meta's Muse models for the Me
 
 PGT checks your ad account every day, plans and makes new ads every week, and never changes anything without your approval. Every number it shows traces back to the source data.
 
-**Live demo:** [pallas-ads.github.io/pallas-growth](https://pallas-ads.github.io/pallas-growth/), a read-only recording of a live run for a synthetic pet-supplies store: 14 daily checks and one weekly review with three new ads, $1.14 of model calls in all.
+**Live demo:** [pallas-ads.github.io/pallas-growth](https://pallas-ads.github.io/pallas-growth/), the project homepage with read-only recordings of two live runs on synthetic sandbox accounts: Northpaw Supply, a pet-supplies store (14 daily checks and one weekly review with three new ads, $1.14 of model calls), and Pallas Fit, a fitness app with no ad history ($0.96).
 
 ## How it works
 
@@ -59,6 +59,7 @@ uv run python -m bench.run
 | `src/pgt/ads/` | Real ad accounts: Meta Ads MCP reads, Marketing API writes, Facebook Login |
 | `src/pgt/creative/` | Product cutout and ad composition |
 | `src/pgt/api/`, `web/` | FastAPI server and the React app |
+| `site/`, `replay/` | The public homepage and the recorded runs it embeds |
 | `bench/` | The comparison bench and its arms |
 | `spike/` | The Day 1 spike that chose Pydantic AI for the per-role agent loop |
 
