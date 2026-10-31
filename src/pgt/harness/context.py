@@ -1,4 +1,4 @@
-"""Context assembler: builds each role's context in a fixed order and logs its hash (PRD §8.3)."""
+"""Context assembler: builds each role's context in a fixed order and logs its hash."""
 
 from __future__ import annotations
 

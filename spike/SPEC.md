@@ -1,8 +1,8 @@
 # Framework spike: Pydantic AI vs OpenAI Agents SDK
 
-Goal: pick the library for the per-role agent loop (PRD §8.6). The same small task is built twice, and the acceptance tests in `spike/tests/` run against both builds.
+Goal: pick the library for the per-role agent loop. The same small task is built twice, and the acceptance tests in `spike/tests/` run against both builds.
 
-Everything here runs **offline** against a fake Meta Model API. Live runs against the real API happen later, only through `spike/run_live.py`, and only when Jieyi approves.
+Everything here runs **offline** against a fake Meta Model API. Live runs against the real API happen later, only through `spike/run_live.py`, and only with the owner's approval.
 
 ## Files to write
 

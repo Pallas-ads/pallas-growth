@@ -1,4 +1,4 @@
-"""Deliverables of the weekly growth review (PRD §7.2).
+"""Deliverables of the weekly growth review.
 
 Classes under "Returned by model calls" follow Meta's strict JSON-schema rules: every field
 required, no defaults. Classes under "Built in code" are assembled and checked by the harness.

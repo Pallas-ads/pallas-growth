@@ -1,4 +1,4 @@
-"""Acceptance scenarios 7 and 8 (PRD §11), run offline through the real client and harness."""
+"""Acceptance scenarios 7 and 8, run offline through the real client and harness."""
 
 import asyncio
 

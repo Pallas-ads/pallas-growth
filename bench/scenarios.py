@@ -1,4 +1,4 @@
-"""Scenarios from PRD §11, each with the mistake the offline model is scripted to make. Every
+"""The acceptance scenarios, each with the mistake the offline model is scripted to make. Every
 arm meets the same mistake; the grader checks what reaches the sandbox. Scenarios 1-6 run the
 weekly review; scenario 7 runs one daily check."""
 

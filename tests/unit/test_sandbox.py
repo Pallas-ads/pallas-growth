@@ -1,4 +1,4 @@
-"""Acceptance tests for the sandbox (docs/tasks/day2-sandbox.md)."""
+"""Acceptance tests for the sandbox."""
 
 import json
 

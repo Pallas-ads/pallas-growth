@@ -1,4 +1,4 @@
-"""The weekly growth review (PRD §5.2), in three stages split by the user's two approvals:
+"""The weekly growth review, in three stages split by the user's two approvals:
 
 1. plan_week: findings -> Intake -> Analyst and Strategist in parallel -> test plan.
    Stops for approval 1 (the test plan).

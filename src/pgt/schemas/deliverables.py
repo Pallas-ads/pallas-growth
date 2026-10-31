@@ -1,4 +1,4 @@
-"""Typed deliverables (PRD §8.3). Models that a role's model call returns follow Meta's strict
+"""Typed deliverables. Models that a role's model call returns follow Meta's strict
 JSON-schema rules: no defaults, every field required, no allOf/oneOf."""
 
 from __future__ import annotations

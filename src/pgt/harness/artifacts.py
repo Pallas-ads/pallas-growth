@@ -131,7 +131,7 @@ class ArtifactStore:
                 break
             affected.update(downstream)
         # Applied change sets, and the work they were built from, are history: what reached the
-        # account stays as it was (PRD §4.3).
+        # account stays as it was.
         applied = {e.refs[0] for e in self._events.list("changeset.applied") if e.refs}
         by_id = {r.artifact_id: r for r in records}
         todo = list(applied)

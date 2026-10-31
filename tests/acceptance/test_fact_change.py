@@ -1,4 +1,4 @@
-"""Acceptance scenario 4 (PRD §11): change a fact, and only the work built on it re-runs.
+"""Acceptance scenario 4: change a fact, and only the work built on it re-runs.
 
 After the weekly budget drops, the test plan is re-split and the change set needs a new approval;
 findings, research and the new ads are not redone, and no model is called."""

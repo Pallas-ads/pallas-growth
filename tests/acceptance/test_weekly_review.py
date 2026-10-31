@@ -1,4 +1,4 @@
-"""Acceptance scenarios 1, 2, 3 and 6 (PRD §11): the weekly review, run offline through the real
+"""Acceptance scenarios 1, 2, 3 and 6: the weekly review, run offline through the real
 client, harness, image pipeline and checks. Each test starts after a 7-day simulation."""
 
 import asyncio
