@@ -158,6 +158,7 @@ button.btn { font-family: var(--ui); }
 .frame-open { margin-left: auto; font: 500 12px var(--ui); color: var(--blue-ink); }
 .su-err { margin: 0; font: 13px var(--ui); color: #b42318; }
 .su-err:empty { display: none; }
+.su-hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
 
 /* narrower screens: the crew flow runs top to bottom */
 @media (max-width: 1140px) {
@@ -204,7 +205,7 @@ button.btn { font-family: var(--ui); }
   <nav class="nav">
     <a class="brand" href="./"><img src="pallas-logo.png" alt="" />Pallas Growth Team</a>
     <div class="links"><a href="#crew">The crew</a><a href="#demo">Live demo</a><a href="#meta">Built on Meta</a></div>
-    <a class="btn sm bare" href="https://github.com/Pallas-ads/pallas-growth"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>GitHub</a>
+    <a class="btn sm bare" id="repo-link" style="visibility: hidden"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>GitHub</a>
   </nav>
 
   <header class="hero">
@@ -348,6 +349,7 @@ button.btn { font-family: var(--ui); }
         <p>A live walkthrough on your own Meta ads. We'll email you to pick a time.</p>
         <label>Name<input type="text" name="name" autocomplete="name" placeholder="Your name" required /></label>
         <label>Work email<input type="email" name="email" autocomplete="email" placeholder="you@company.com" required /></label>
+        <input class="su-hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" />
         <p class="su-err" id="su-err"></p>
         <button class="btn pri" type="submit">Request a demo</button>
         <p class="su-fine">We only use your email to set up the demo.</p>
@@ -359,8 +361,8 @@ button.btn { font-family: var(--ui); }
       </div>
       <div class="su-pane" id="su-soon">
         <h3>Sign-ups open soon.</h3>
-        <p>Demo requests aren't connected yet, so nothing was sent. Follow the project on GitHub to hear when they open.</p>
-        <a class="btn ghost" href="https://github.com/Pallas-ads/pallas-growth">GitHub</a>
+        <p>Demo requests aren't connected yet, so nothing was sent. Please check back in a few days.</p>
+        <button class="btn ghost" type="button" data-close>Close</button>
       </div>
     </div>
   </div>
@@ -377,9 +379,19 @@ button.btn { font-family: var(--ui); }
 </div>
 
 <script>
-// Where demo requests go: a form endpoint that accepts a JSON POST of {name, email}.
-// Empty until one is chosen; the form then says plainly that nothing was sent.
+// The project's GitHub repository. Empty for now, which hides the nav link.
+const PROJECT_REPO = "";
+
+// Where demo requests go: the web app URL of the Google Apps Script in site/signup-sheet.gs,
+// which adds each request as a row in a Google Sheet. Empty until it is set up; the form
+// then says plainly that nothing was sent.
 const SIGNUP_ENDPOINT = "";
+
+if (PROJECT_REPO) {
+  const a = document.getElementById("repo-link");
+  a.href = PROJECT_REPO;
+  a.style.visibility = "";
+}
 
 const CREW = {
   GL: { name: "Growth Lead", tag: "Plans the week", voice: "Two tests this week, not five. Here is why.", does: "Turns your goal and last week's results into a brief and a test plan, then hands out the work.", model: "Muse Spark Open" },
@@ -453,14 +465,16 @@ $("su-form").addEventListener("submit", async (e) => {
     $("su-err").textContent = "Add your name and a work email.";
     return;
   }
+  if (f.website.value) { showPane("su-done"); return; } // a bot filled the hidden field
   if (!SIGNUP_ENDPOINT) { showPane("su-soon"); return; }
   try {
+    // A form-encoded POST is a simple request, so Apps Script needs no CORS preflight.
     const res = await fetch(SIGNUP_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ name, email }),
+      body: new URLSearchParams({ name, email, page: location.href }),
     });
-    if (!res.ok) throw new Error(String(res.status));
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || String(res.status));
     f.reset();
     showPane("su-done");
   } catch {
