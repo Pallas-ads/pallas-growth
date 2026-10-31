@@ -73,4 +73,6 @@ Pallas started before the event as an ad-analysis plugin for coding agents. None
 
 ## License
 
-MIT
+The code in this repository is MIT licensed.
+
+**Built with Muse Spark Open.** The team's roles run on Muse Spark Open, used under the Muse Model License, which asks for this notice. The model weights are not part of this repository.
