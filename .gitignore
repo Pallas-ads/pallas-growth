@@ -31,3 +31,4 @@ web/dist-replay/
 
 # Bench output
 bench/out/
+_site/

@@ -270,17 +270,17 @@ The API checks the level before it accepts an approval, and the Operator checks 
 
 ## The public replay
 
-The public demo is a recording of a real live run, served as static files. It calls no model and holds no key.
+The public site is a homepage plus two recordings of real live runs, served as static files: Northpaw Supply, a pet-supplies store (`--template ecommerce`), and Pallas Fit, a fitness app starting cold (`--template app --cold`). It calls no model and holds no key.
 
 ```mermaid
 flowchart TB
-    run["pgt serve --live<br/>--template ecommerce --cap 5"] --> db[("Workspace")]
+    run["pgt serve --live<br/>--template ecommerce or app --cap 5"] --> db[("Workspace")]
     db --> api["Read endpoints"]
     api --> rep["pgt replay<br/>fetch every view and image"]
     rep --> chk{"Synthetic only?<br/>no local paths, keys,<br/>tokens or real account IDs"}
     chk -- "no" --> stop(["Refuse and delete the output"])
-    chk -- "yes" --> files["replay/data/*.json<br/>replay/media/*"]
-    files --> ci["GitHub Actions<br/>vite build --mode replay"]
+    chk -- "yes" --> files["replay/&lt;run&gt;/data/*.json<br/>replay/&lt;run&gt;/media/*"]
+    files --> ci["GitHub Actions<br/>site/build.sh: homepage at the root,<br/>one replay per run under demo/"]
     ci --> pages["GitHub Pages"]
 ```
 
